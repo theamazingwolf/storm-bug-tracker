@@ -1,4 +1,8 @@
-# BugShot
+# Storm Bug Tracker
+
+This is an MIT fork of BugShot. See the [English fork notice](README.md) for implemented changes, verification limits, and the GitHub attachment caveat. Store links in the original README below install upstream BugShot, not this fork.
+
+## Upstream BugShot
 
 [English](README.md) · **한국어**
 

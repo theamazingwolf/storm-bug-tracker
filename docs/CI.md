@@ -4,7 +4,7 @@
 
 ## job 3개
 
-- **`verify`** — typecheck → test → build → check:prearm. Uses public dummy environment values only; no provider credentials or client data. Browser-independent. Job limit: 15 minutes.
+- **`verify`** — typecheck → extension tests → native helper tests/checks → build → check:prearm. Uses public dummy environment values only; no provider credentials or client data. Browser-independent. Job limit: 15 minutes.
 - **`e2e`** — Playwright 전 스위트(82 spec / 372 테스트)를 `--shard=N/4` 매트릭스로 4개 러너에 분산. **샤딩이 유일한 병렬 수단인 이유는 `workers: 1`이기 때문**이다 — 확장 + persistent context는 프로필 단위 상태라 한 러너 안에서 병렬이 안 된다. project는 둘이다: `sidepanel`(확장 구동 메인 스위트, `**/logview/**` 제외)과 `logview`(확장을 안 띄우고 `dist-log-viewer/index.html`을 직접 여는 standalone, viewport 1280×800). `logview`에 **`dependencies`를 일부러 안 둔다** — 실제 의존이 없고, 의존 project는 샤드마다 전량 실행돼 샤딩 효과를 지운다. (개수는 `pnpm test:e2e --list`로 확인한다. `log-viewer.spec.ts`의 언어별 suite처럼 동적으로 늘어나는 테스트가 있어 정적 선언 수와 다르다.) 각 샤드는 `pnpm build:e2e`로 `dist-e2e`를 자기 러너에 새로 만든다(`verify`가 만드는 `dist`와 별개 산출물이고 job 사이에 전달되지 않는다). Chromium은 `actions/cache@v4`(키 `playwright-<os>-<pw 버전>`)로 캐시하고 **미스일 때만** `playwright install --with-deps chromium`을 `timeout-minutes: 6`으로 돌린다(apt가 가끔 10분으로 튀는 편차를 자른다). 확장 SW가 headless에서 안 깨어나 `headless: false`가 강제라(`e2e/fixtures/extension.ts`) `xvfb-run`으로 돌린다 — **가상 스크린 깊이 24는 필수**(기본 8비트인 배포판이 있고 캡처 spec이 픽셀 색을 직접 판정한다). `fail-fast: false`라 한 샤드가 깨져도 나머지를 완주하고, 실패 샤드는 report·trace를 artifact로 올린다. launch args의 `--host-resolver-rules=MAP *.bugshot.test 127.0.0.1`도 전제다 — 서브도메인이 갈리는 **동족 origin**을 만드는 유일한 수단이라(127.0.0.1↔localhost는 registrable domain이 서로 다르다) 이게 없으면 `api-hosts-env-row` spec이 통째로 무의미해진다. job 상한은 30분인데 **여기서 잘리면 hard kill이라 뒤따르는 artifact 업로드 스텝이 안 돈다** — 타임아웃 실패는 report·trace 없이 온다.
 - **`e2e-gate`** — 4샤드 결과를 단일 이름으로 수렴시키는 집계 job. main의 **required status check는 `verify` + `e2e-gate` 둘**이고, 샤드 개수를 바꿔도 이 이름은 안 변하므로 프로텍션 설정을 다시 건드릴 필요가 없다. 상한 5분.
 fork PR 축의 나머지 반쪽은 워크플로 레벨 `permissions: contents: read`다 — fork PR의 임의 코드가 이 워크플로에서 도는 이상 `GITHUB_TOKEN`을 읽기 전용으로 고정해 둔다.
@@ -22,6 +22,8 @@ cp .env.ci .env.local
 pnpm typecheck
 pnpm test
 ```
+
+The native helper has a separate Node test runner: `npm ci --ignore-scripts --prefix native/chatgpt-host`, then `npm test --prefix native/chatgpt-host` and `npm run check --prefix native/chatgpt-host`. These tests use temporary fixtures, never real browser registration or provider credentials. Vitest excludes this Node-only suite. The Storm destination browser smoke uses a disposable Chromium profile, a loopback-only fixture server, and external DNS denial.
 
 `.env.ci` contains dummy configuration to keep integration UI configuration deterministic; it is not a provider credential. Do not use real provider keys for baseline or test runs. The CI `verify` and `e2e` jobs both copy `.env.ci` to `.env.local` before their tests/builds.
 

@@ -1,4 +1,16 @@
-# BugShot
+# Storm Bug Tracker
+
+An MIT fork of [BugShot](https://github.com/SinhyeokKang/bugshot-2), preserving its capture → review → submit workflow and original attribution.
+
+This fork adds multiple GitHub accounts and Linear workspaces, exact website-origin destinations, stable draft destination snapshots, and safer AI drafting. The optional [Linux ChatGPT subscription helper](native/chatgpt-host/README.md) keeps credentials outside the extension and supports text-only drafting without a paid-API fallback.
+
+**Development preview:** this fork has not been published to the Chrome Web Store. Live helper installation, OAuth consent, and subscription inference remain unverified and require explicit user action. The Store links below install upstream BugShot, not Storm Bug Tracker.
+
+**GitHub attachment limitation:** issue API requests use the bound account, but website attachment uploads depend on the browser's GitHub cookie session. The account preflight is not atomic with upload. If account identity is uncertain, use the downloadable/manual-attachment fallback rather than treating website uploads as token-bound.
+
+The original BugShot README follows; its hosted services and release links describe upstream.
+
+## Upstream BugShot
 
 **English** · [한국어](README.ko.md)
 
