@@ -17,6 +17,16 @@ export type ResolvedDestinationBinding =
       binding: DestinationProfile;
     };
 
+/** Compare only provider target identity; display-only profile names never affect a draft binding. */
+export function sameDestinationTarget(a: DestinationProfile, b: DestinationProfile): boolean {
+  if (a.platform !== b.platform || a.connectionId !== b.connectionId) return false;
+  return a.platform === "github" && b.platform === "github"
+    ? a.owner === b.owner && a.repo === b.repo
+    : a.platform === "linear" && b.platform === "linear"
+      ? a.organizationId === b.organizationId && a.teamId === b.teamId && a.projectId === b.projectId
+      : false;
+}
+
 /** Store only the provider-native target and connection ID, not profile/default/account projections. */
 export function cloneDestinationBinding(profile: DestinationProfile): DestinationProfile {
   return profile.platform === "github"

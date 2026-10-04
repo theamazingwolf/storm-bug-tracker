@@ -16,18 +16,31 @@ vi.mock("@/lib/bg-client", async (importOriginal) => {
 });
 
 const patchIssue = vi.fn();
+let issues: Array<Record<string, unknown>> = [];
+const getIssuesState = () => ({ issues, patchIssue });
 vi.mock("@/store/issues-store", () => ({
-  useIssuesStore: (sel: (s: { patchIssue: typeof patchIssue }) => unknown) =>
-    sel({ patchIssue }),
+  useIssuesStore: (sel: (s: ReturnType<typeof getIssuesState>) => unknown) =>
+    sel(getIssuesState()),
 }));
 
+const GITHUB_CONNECTION = {
+  id: "github-connection-1",
+  platform: "github",
+  account: { platform: "github", connectedAt: 1, auth: { kind: "pat", pat: "mock", viewerLogin: "octocat" }, defaults: {} },
+};
 const ACCOUNTS = {
   jira: { auth: { kind: "oauth", cloudId: "site-1" } },
   github: { login: "octocat" },
 };
+const SETTINGS = {
+  accounts: ACCOUNTS,
+  connections: { github: [GITHUB_CONNECTION], linear: [] },
+  destinationProfiles: [],
+  websiteOriginMappings: [],
+  selectedConnectionIds: { github: GITHUB_CONNECTION.id },
+};
 vi.mock("@/store/settings-store", () => ({
-  useSettingsStore: (sel: (s: { accounts: typeof ACCOUNTS }) => unknown) =>
-    sel({ accounts: ACCOUNTS }),
+  useSettingsStore: (sel: (s: typeof SETTINGS) => unknown) => sel(SETTINGS),
   jiraSiteId: (auth: { cloudId: string }) => auth.cloudId,
 }));
 
@@ -69,6 +82,7 @@ describe("SubmittedBadge 제목 동기화", () => {
   beforeEach(() => {
     sendBg.mockReset();
     patchIssue.mockReset();
+    issues = [];
   });
 
   it("Jira는 응답의 summary를 title로 반영한다", async () => {
@@ -83,8 +97,12 @@ describe("SubmittedBadge 제목 동기화", () => {
     );
   });
 
-  it("GitHub은 응답의 title을 반영한다", async () => {
+  it("GitHub은 draft의 connectionId로 상태 조회하고 응답 title을 반영한다", async () => {
     sendBg.mockResolvedValue(GITHUB_STATUS);
+    issues = [{
+      id: "issue-1",
+      destinationBinding: { platform: "github", connectionId: GITHUB_CONNECTION.id, owner: "o", repo: "r" },
+    }];
 
     renderBadge({
       platform: "github",
@@ -95,6 +113,13 @@ describe("SubmittedBadge 제목 동기화", () => {
     });
 
     await waitFor(() => expect(patchIssue).toHaveBeenCalled());
+    expect(sendBg).toHaveBeenCalledWith(expect.objectContaining({
+      type: "github.getIssueStatus",
+      owner: "o",
+      repo: "r",
+      number: 42,
+      connectionId: GITHUB_CONNECTION.id,
+    }));
     expect(patchIssue).toHaveBeenCalledWith(
       "issue-1",
       expect.objectContaining({ title: "트래커에서 수정된 제목" }),

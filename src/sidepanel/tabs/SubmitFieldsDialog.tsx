@@ -17,7 +17,6 @@ import { useEditorStore } from "@/store/editor-store";
 import type { CaptureMode, EditorIssueFields } from "@/store/editor-store";
 import {
   isJiraAccountComplete,
-  isLinearAccountComplete,
   isNotionAccountComplete,
   useSettingsStore,
 } from "@/store/settings-store";
@@ -127,8 +126,7 @@ export function SubmitFieldsDialog(props: SubmitFieldsDialogProps) {
   } = props;
   const t = useT();
   const jiraAccount = useSettingsStore((s) => s.accounts.jira);
-  const ghAccount = useSettingsStore((s) => s.accounts.github);
-  const linearAccount = useSettingsStore((s) => s.accounts.linear);
+  const connections = useSettingsStore((s) => s.connections);
   const notionAccount = useSettingsStore((s) => s.accounts.notion);
   const gitlabAccount = useSettingsStore((s) => s.accounts.gitlab);
   const asanaAccount = useSettingsStore((s) => s.accounts.asana);
@@ -142,8 +140,21 @@ export function SubmitFieldsDialog(props: SubmitFieldsDialogProps) {
   }, [open]);
 
   const jiraConfigured = isJiraAccountComplete(jiraAccount);
-  const ghConfigured = !!ghAccount;
-  const linearConfigured = isLinearAccountComplete(linearAccount);
+  const boundGithubConnection = destinationBinding?.platform === "github"
+    ? connections.github.find((connection) => connection.id === destinationBinding.connectionId)
+    : undefined;
+  const boundLinearConnection = destinationBinding?.platform === "linear"
+    ? connections.linear.find((connection) => connection.id === destinationBinding.connectionId)
+    : undefined;
+  const ghConfigured = !!boundGithubConnection
+    && destinationBinding?.platform === "github"
+    && destinationBinding.owner === ghFields.owner
+    && destinationBinding.repo === ghFields.repo;
+  const linearConfigured = !!boundLinearConnection
+    && destinationBinding?.platform === "linear"
+    && boundLinearConnection.organization?.id === destinationBinding.organizationId
+    && destinationBinding.teamId === linearFields.teamId
+    && destinationBinding.projectId === linearFields.projectId;
   const notionConfigured = isNotionAccountComplete(notionAccount);
   const gitlabConfigured = !!gitlabAccount;
   const asanaConfigured = !!asanaAccount;
@@ -172,8 +183,8 @@ export function SubmitFieldsDialog(props: SubmitFieldsDialogProps) {
   const fieldsReady = ((): boolean => {
     switch (platform) {
       case "jira": return !!jiraFields.projectKey && !!jiraFields.issueTypeId;
-      case "github": return !!ghFields.owner && !!ghFields.repo;
-      case "linear": return !!linearFields.teamId;
+      case "github": return ghConfigured;
+      case "linear": return linearConfigured;
       case "gitlab": return !!gitlabFields.projectId;
       case "asana": return !!asanaFields.workspaceGid;
       case "clickup": return !!clickupFields.workspaceId && !!clickupFields.listId;

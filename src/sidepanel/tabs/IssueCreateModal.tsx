@@ -23,7 +23,7 @@ import {
 import type { PlatformId } from "@/types/platform";
 import type { DestinationProfile } from "@/types/connection";
 import { matchWebsiteOrigin } from "@/lib/site-destination-routing";
-import { cloneDestinationBinding, resolveDestinationBinding } from "@/sidepanel/lib/destinationBinding";
+import { cloneDestinationBinding, resolveDestinationBinding, sameDestinationTarget } from "@/sidepanel/lib/destinationBinding";
 import { githubFieldsForDestination, linearFieldsForDestination } from "@/sidepanel/lib/boundDestinationFields";
 import { buildCaptureFiles, type CaptureFiles } from "@/sidepanel/lib/buildCaptureFiles";
 import { buildEditorMarkdownContext, buildEditorLogsCaptureInput } from "@/sidepanel/lib/buildEditorCapture";
@@ -85,12 +85,15 @@ export function IssueCreateModal() {
   const currentIssueId = useEditorStore((s) => s.currentIssueId);
 
   const available = useMemo(
-    () => Array.from(new Set([...connectedPlatforms(accounts), ...destinationProfiles.map((profile) => profile.platform)])),
+    () => Array.from(new Set<PlatformId>([...connectedPlatforms(accounts), ...destinationProfiles.map((profile) => profile.platform), "github", "linear"])),
     [accounts, destinationProfiles],
   );
   const initialPlatform = useMemo(
-    () => pickInitialPlatform(accounts, lastSubmittedPlatform),
-    [accounts, lastSubmittedPlatform],
+    () => pickInitialPlatform(accounts, lastSubmittedPlatform)
+      ?? destinationBinding?.platform
+      ?? destinationProfiles[0]?.platform
+      ?? "github",
+    [accounts, lastSubmittedPlatform, destinationBinding, destinationProfiles],
   );
   const [platform, setPlatform] = useState<PlatformId>(initialPlatform ?? "jira");
 
@@ -109,7 +112,34 @@ export function IssueCreateModal() {
       } else {
         const connection = useSettingsStore.getState().connections.linear.find((item) => item.id === saved.connectionId);
         const display = destinationProfiles.find((profile) => profile.id === saved.id);
-        setLinearFields(linearFieldsForDestination(saved, connection, display?.platform === "linear" ? display : undefined));
+        setLinearFields(linearFieldsForDestination(saved, connection,
+          display?.platform === "linear" && sameDestinationTarget(saved, display) ? display : undefined));
+      }
+      return;
+    }
+    if (currentIssueId) {
+      const legacy = useIssuesStore.getState().issues.find((issue) => issue.id === currentIssueId);
+      setDestinationBinding(null);
+      const preservedPlatform = legacy?.platform ?? initialPlatform;
+      if (preservedPlatform) {
+        setPlatform(preservedPlatform);
+        setTargetPlatform(preservedPlatform);
+      }
+      return;
+    }
+    if (destinationBinding) {
+      setPlatform(destinationBinding.platform);
+      setTargetPlatform(destinationBinding.platform);
+      if (resolveDestinationBinding(destinationBinding, useSettingsStore.getState().connections).ok) {
+        if (destinationBinding.platform === "github") {
+          const connection = useSettingsStore.getState().connections.github.find((item) => item.id === destinationBinding.connectionId);
+          setGhFields(githubFieldsForDestination(destinationBinding, connection));
+        } else {
+          const connection = useSettingsStore.getState().connections.linear.find((item) => item.id === destinationBinding.connectionId);
+          const display = destinationProfiles.find((profile) => profile.id === destinationBinding.id);
+          setLinearFields(linearFieldsForDestination(destinationBinding, connection,
+            display?.platform === "linear" && sameDestinationTarget(destinationBinding, display) ? display : undefined));
+        }
       }
       return;
     }

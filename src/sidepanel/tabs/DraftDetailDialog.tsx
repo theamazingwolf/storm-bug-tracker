@@ -82,7 +82,7 @@ import { submitToWebhook } from "@/sidepanel/lib/submitToWebhook";
 import { formatTimestamp } from "@/sidepanel/lib/formatTimestamp";
 import type { NotionDatabaseSchema } from "@/types/notion";
 import type { DestinationProfile } from "@/types/connection";
-import { cloneDestinationBinding, resolveDestinationBinding } from "@/sidepanel/lib/destinationBinding";
+import { cloneDestinationBinding, resolveDestinationBinding, sameDestinationTarget } from "@/sidepanel/lib/destinationBinding";
 import { githubFieldsForDestination, linearFieldsForDestination } from "@/sidepanel/lib/boundDestinationFields";
 import { usePlatformFields } from "@/sidepanel/hooks/usePlatformFields";
 import { extractNotionPageId } from "@/lib/notion-page-id";
@@ -347,7 +347,8 @@ function EditableDraftDetailDialog({
     } else if (issue?.destinationBinding?.platform === "linear") {
       const connection = useSettingsStore.getState().connections.linear.find((item) => item.id === issue.destinationBinding?.connectionId);
       const display = useSettingsStore.getState().destinationProfiles.find((profile) => profile.id === issue.destinationBinding?.id);
-      setLinearFields(linearFieldsForDestination(issue.destinationBinding, connection, display?.platform === "linear" ? display : undefined));
+      setLinearFields(linearFieldsForDestination(issue.destinationBinding, connection,
+        display?.platform === "linear" && sameDestinationTarget(issue.destinationBinding, display) ? display : undefined));
     }
     setSubmitOpen(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
