@@ -179,6 +179,38 @@ describe("fresh capture confirmDraft → saved draft → submit modal", () => {
     expect(screen.getByTestId("routable-destination-picker")).toBeTruthy();
   });
 
+  it("opens an inline picker after a zero-account capture was saved with the old editor default", async () => {
+    useSettingsStore.setState({ connections: { github: [], linear: [] }, destinationProfiles: [], websiteOriginMappings: [] });
+    beginFreshCapture();
+    expect(useEditorStore.getState().confirmDraft()).toBe(true);
+    render(<IssueCreateModal />);
+    await userEvent.click(screen.getByTestId("issue-submit-open"));
+    const dialog = await screen.findByTestId("submit-dialog");
+    expect(dialog.getAttribute("data-platform")).toBe("github");
+    expect(dialog.getAttribute("data-binding")).toBe("null");
+    expect(screen.getByTestId("routable-destination-picker")).toBeTruthy();
+  });
+
+  it("requires explicit choice for an ambiguous origin even when another provider is configured", async () => {
+    useSettingsStore.setState({
+      accounts: { webhook: { platform: "webhook", connectedAt: 1, auth: { url: "https://example.test/hook", format: "json", headers: [] } } },
+      lastSubmittedPlatform: "webhook",
+      destinationProfiles: [profile, { ...profile, id: "other-profile", repo: "other" }],
+      websiteOriginMappings: [
+        { origin: "https://app.example.test", destinationId: profile.id },
+        { origin: "https://app.example.test", destinationId: "other-profile" },
+      ],
+    });
+    beginFreshCapture();
+    expect(useEditorStore.getState().confirmDraft()).toBe(true);
+    expect(issuesHarness.state.issues[0].platform).toBe("github");
+    expect(issuesHarness.state.issues[0].destinationBinding).toBeUndefined();
+    render(<IssueCreateModal />);
+    await userEvent.click(screen.getByTestId("issue-submit-open"));
+    expect(screen.getByTestId("submit-dialog").getAttribute("data-platform")).toBe("github");
+    expect(screen.getByTestId("submit-dialog").getAttribute("data-binding")).toBe("null");
+  });
+
   it("does not retroactively bind an existing legacy draft when its page origin now has a mapping", async () => {
     issuesHarness.state.issues = [{ id: "legacy-id", status: "draft", platform: "github", title: "Legacy", pageUrl: "https://app.example.test/issues/123", draft: { title: "Legacy", sections: {} } }];
     useEditorStore.setState({

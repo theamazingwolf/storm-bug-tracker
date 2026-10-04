@@ -120,7 +120,9 @@ export function IssueCreateModal() {
     if (currentIssueId) {
       const legacy = useIssuesStore.getState().issues.find((issue) => issue.id === currentIssueId);
       setDestinationBinding(null);
-      const preservedPlatform = legacy?.platform ?? initialPlatform;
+      const preservedPlatform = legacy?.platform && available.includes(legacy.platform)
+        ? legacy.platform
+        : initialPlatform;
       if (preservedPlatform) {
         setPlatform(preservedPlatform);
         setTargetPlatform(preservedPlatform);

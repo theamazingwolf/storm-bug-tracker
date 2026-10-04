@@ -944,6 +944,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       : undefined;
     let captureBinding = state.destinationBinding;
     let capturePlatform = state.targetPlatform;
+    let needsDestinationChoice = false;
     if (!state.currentIssueId && !captureBinding) {
       const settings = useSettingsStore.getState();
       const connections = settings.connections ?? { github: [], linear: [] };
@@ -953,9 +954,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (match.status === "matched" && resolveDestinationBinding(match.destination, connections).ok) {
         captureBinding = cloneDestinationBinding(match.destination);
         capturePlatform = match.destination.platform;
+      } else if (match.status === "ambiguous") {
+        // Show the explicit destination chooser, not an unrelated connected provider.
+        capturePlatform = match.destinations[0].platform;
+        needsDestinationChoice = true;
       }
     }
-    if (!state.currentIssueId && !captureBinding) {
+    if (!state.currentIssueId && !captureBinding && !needsDestinationChoice) {
       const settings = useSettingsStore.getState();
       const connections = settings.connections ?? { github: [], linear: [] };
       const accounts = settings.accounts ?? {};
