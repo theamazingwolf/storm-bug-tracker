@@ -54,6 +54,12 @@ jobs:
       - name: Unit + DOM tests
         run: pnpm test
 
+      - name: Native helper tests (synthetic, no installation or credentials)
+        run: |
+          npm ci --ignore-scripts --prefix native/chatgpt-host
+          npm test --prefix native/chatgpt-host
+          npm run check --prefix native/chatgpt-host
+
       # pre-arm의 **구조적** 전제를 빌드 산출물로 검증한다 — recorders-entry가 async
       # loader로 강등되면 로드 초반 로그가 조용히 사라지는데 typecheck도 유닛도 못 잡는다.
       # 행동 검증(e2e/logs-prearm.spec.ts)은 아래 e2e job이 맡고, 이건 몇 초 만에 끝나는

@@ -53,6 +53,7 @@ test("scope gate and safe errors never echo credentials", () => {
   assert.equal(safeErrorCode(new Error("Bearer fake-access-token")), "request_failed");
   assert.equal(safeErrorCode("refresh_token=fake-refresh-token"), "request_failed");
   assert.equal(safeErrorCode("invalid_profile_id"), "invalid_profile_id");
+  assert.equal(safeErrorCode(new Error("model_not_available")), "model_not_available");
   assert.equal(safeErrorCode(new Error("authorization_cancelled")), "authorization_cancelled");
   assert.equal(safeErrorCode(new Error("authorization_denied")), "authorization_denied");
   assert.equal(safeErrorCode(new Error("authorization_timeout")), "authorization_timeout");

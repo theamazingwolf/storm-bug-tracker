@@ -1,6 +1,6 @@
 # Storm Bug Tracker ChatGPT native helper (Linux)
 
-This is an independently implemented, draft-only local companion foundation for Linux. It uses the public Sign in with ChatGPT OAuth contract and a Chrome Native Messaging host. It does not use the OpenAI DevKit source, Codex credentials, browser cookies, ChatGPT backend APIs, DNR, redirects, or a first-party Codex client ID. It is not wired to the extension UI.
+This is an independently implemented, draft-only local companion for Linux, wired to the extension's ChatGPT subscription settings. It uses the public Sign in with ChatGPT OAuth contract and a Chrome Native Messaging host. It does not use the OpenAI DevKit source, Codex credentials, browser cookies, ChatGPT backend APIs, redirect interception, or a first-party Codex client ID.
 
 ## Boundary and current status
 
@@ -15,7 +15,7 @@ This is an independently implemented, draft-only local companion foundation for 
 
 ## Setup (explicit user action only)
 
-Install dependencies in this directory, then provide the **exact ID of the user's Storm Bug Tracker fork extension**. IDs are validated as 32 lowercase `[a-p]` characters; wildcard origins and upstream BugShot IDs are not accepted by default. The installer writes a user-space Native Messaging manifest only. It does not install Node, change system files, launch Chrome, or grant host permissions. Review the generated file before restarting Chrome/Chromium.
+Install dependencies in this directory, then provide the **exact ID of the user's Storm Bug Tracker fork extension**. IDs are validated as 32 lowercase `[a-p]` characters; wildcard origins and upstream BugShot IDs are not accepted by default. The installer writes a user-space Native Messaging manifest and its owner-only executable launcher. It does not install Node, change system files, launch Chrome, or grant host permissions. Review the generated file before restarting Chrome/Chromium.
 
 ```sh
 cd native/chatgpt-host
@@ -74,7 +74,7 @@ npm test
 npm run check
 ```
 
-The tests use injected fetch, browser, verifier, and temporary filesystem paths. They make no provider calls and use fake test credentials. This is a foundation, not a live-ready release: the extension Native Messaging wiring, desktop UX/accessibility, actual browser handshake, real-account consent, remote revocation, and independent security review remain outstanding. Do not use real credentials before review and explicit user consent.
+The tests use injected fetch, browser, verifier, and temporary filesystem paths. They make no provider calls and use fake test credentials. Independent security review and synthetic framed-pipe integration cover the helper and extension bridge. This is not live-acceptance evidence: real Chrome installation, desktop UX, account consent, eligible models, and subscription inference still require an explicitly authorized user test. Remote revocation remains a manual action in ChatGPT settings. Root CI runs this Node suite separately from the extension's Vitest suite.
 
 ## Public contract references
 

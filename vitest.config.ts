@@ -12,7 +12,8 @@ export default defineConfig({
     // .claude/**·.worktrees/**는 워크트리 사본 — 같은 테스트를 두 벌 수집해 실패한다
     // (사본 경로는 environmentMatchGlobs의 jsdom 분기도 못 타서 document 미정의로 죽는다).
     // 워크트리 위치가 바뀌면 여기도 같이 늘린다.
-    exclude: [...configDefaults.exclude, "e2e/**", ".claude/**", ".worktrees/**"],
+    // The native helper has its own Node test runner (executed separately in CI).
+    exclude: [...configDefaults.exclude, "e2e/**", ".claude/**", ".worktrees/**", "native/chatgpt-host/**"],
     // 컴포넌트 렌더 테스트(*.test.tsx)만 jsdom. 순수 함수 테스트는 node 유지.
     environmentMatchGlobs: [["**/*.test.tsx", "jsdom"]],
     // 기본 5초는 jsdom + userEvent 조합에 빠듯하다. 콤보박스류는 단독으로도 2~6초를 쓰는데,

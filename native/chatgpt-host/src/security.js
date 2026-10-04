@@ -55,7 +55,7 @@ const SAFE_INTERNAL_CODES = new Set([
   "token_http_400", "token_http_401", "token_http_403", "token_http_429", "token_http_500", "token_http_503",
   "invalid_grant", "plan_scope_not_granted", "invalid_token_response", "invalid_token_type", "invalid_host_id_record", "invalid_profile_record", "invalid_lock_owner", "unsafe_storage_path", "unsafe_profile_file", "unsafe_lock_path", "invalid_frame_size", "invalid_json_frame", "oversized_frame", "truncated_frame", "auth_superseded", "profile_already_exists", "profile_lock_owner_changed", "unsafe_install_directory", "unsafe_install_file", "install_target_conflict", "incomplete_existing_install", "unsupported_browser", "invalid_or_upstream_extension_id",
   "profile_not_found", "profile_not_signed_in", "profile_lock_busy", "refresh_token_race", "token_refresh_not_yet_allowed",
-  "invalid_model_catalog", "invalid_stream_event", "truncated_stream_event", "response_incomplete",
+  "invalid_model_catalog", "model_not_available", "invalid_stream_event", "truncated_stream_event", "response_incomplete",
   "response_failed", "stream_ended_without_completion", "empty_draft_result", "draft_timeout",
   "draft_output_too_large", "sse_input_too_large", "invalid_request", "invalid_params", "invalid_request_id",
   "unsupported_method", "invalid_profile_id", "invalid_model", "invalid_draft_text", "invalid_instructions",
