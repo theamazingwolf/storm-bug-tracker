@@ -4,6 +4,8 @@ export interface LinearApiKeyAuth {
   kind: "apiKey";
   apiKey: string;
   viewerName: string;
+  /** Immutable provider user ID; optional only for pre-migration stored auth. */
+  viewerId?: string;
   viewerEmail?: string;
 }
 
@@ -14,6 +16,8 @@ export interface LinearOAuthAuth {
   expiresAt: number;
   scope: string;
   viewerName: string;
+  /** Immutable provider user ID; optional only for pre-migration stored auth. */
+  viewerId?: string;
   viewerEmail?: string;
   grantedAt: number;
 }

@@ -4,6 +4,8 @@ export interface GithubPatAuth {
   kind: "pat";
   pat: string;
   viewerLogin: string;
+  /** Immutable provider user ID; optional only for pre-migration stored auth. */
+  viewerId?: number;
   viewerEmail?: string;
 }
 
@@ -15,6 +17,8 @@ export interface GithubOAuthAuth {
   refreshToken?: string;
   expiresAt?: number;
   viewerLogin: string;
+  /** Immutable provider user ID; optional only for pre-migration stored auth. */
+  viewerId?: number;
   viewerEmail?: string;
   grantedAt: number;
 }
