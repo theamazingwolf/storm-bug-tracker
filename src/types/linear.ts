@@ -45,6 +45,11 @@ export interface LinearMyself {
   avatarUrl?: string;
 }
 
+export interface LinearOrganization {
+  id: string;
+  name: string;
+}
+
 export interface LinearTeam {
   id: string;
   name: string;

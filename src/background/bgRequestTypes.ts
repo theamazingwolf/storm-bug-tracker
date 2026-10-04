@@ -47,6 +47,7 @@ const BG_REQUEST_TYPE_MAP: Record<BgRequest["type"], true> = {
   "linear.testApiKey": true,
   "linear.disconnect": true,
   "linear.getMyself": true,
+  "linear.getOrganization": true,
   "linear.getTeams": true,
   "linear.getProjects": true,
   "linear.getLabels": true,

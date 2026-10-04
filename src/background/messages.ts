@@ -435,6 +435,9 @@ export async function handleMessage(
     case "linear.disconnect":
       return { ok: true };
 
+    case "linear.getOrganization":
+      throw new Error("Linear organization lookup is not implemented");
+
     case "linear.getMyself":
       return linearGetMyself(await loadLinearAuth());
 

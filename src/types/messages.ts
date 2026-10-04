@@ -29,6 +29,7 @@ import type {
   LinearIssueStatus,
   LinearLabel,
   LinearMyself,
+  LinearOrganization,
   LinearProject,
   LinearTeam,
   LinearUser,
@@ -115,34 +116,39 @@ export type BgRequest =
   | { type: "jira.createIssue"; payload: JiraCreateIssuePayload }
   | { type: "jira.uploadAttachment"; issueKey: string; attachment: JiraAttachmentInput }
   // Existing-issue reads/updates for attachment retry. None of them may fall back to creation.
-  | { type: `${RetryPlatform}.getAccountIdentity`; destination: CreatedDestination }
+  | { type: `${Exclude<RetryPlatform, "github" | "linear">}.getAccountIdentity`; destination: CreatedDestination }
+  | { type: "github.getAccountIdentity"; destination: CreatedDestination; connectionId?: string }
+  | { type: "linear.getAccountIdentity"; destination: CreatedDestination; connectionId?: string }
   | { type: "jira.getIssueAttachments"; issueKey: string }
   | { type: "jira.updateIssueDescription"; issueKey: string; description: import("./jira").JiraAdfDoc; bodyLocale?: import("@/i18n/locales").LocaleMode; uploads: Array<{ filename: string; file: { kind: "media"; mediaId: string; width?: number; height?: number } | { kind: "external"; url: string; width?: number; height?: number } }>; logsUrl?: string; relates?: string[]; slots?: number[] }
   | { type: "github.oauth.available" }
-  | { type: "github.startOAuth" }
+  | { type: "github.startOAuth"; connectionId?: string }
   | { type: "github.testPat"; pat: string }
-  | { type: "github.disconnect" }
-  | { type: "github.getMyself" }
-  | { type: "github.searchRepos"; query: string }
-  | { type: "github.getLabels"; owner: string; repo: string }
-  | { type: "github.searchAssignees"; owner: string; repo: string }
+  | { type: "github.disconnect"; connectionId?: string }
+  | { type: "github.getMyself"; connectionId?: string }
+  | { type: "github.searchRepos"; query: string; connectionId?: string }
+  | { type: "github.getLabels"; owner: string; repo: string; connectionId?: string }
+  | { type: "github.searchAssignees"; owner: string; repo: string; connectionId?: string }
   | {
       type: "github.uploadFiles";
       owner: string;
       repo: string;
       files: Array<{ fileId?: string; filename: string; contentType: string; dataUrl: string }>;
+      connectionId?: string;
     }
   | {
       type: "github.submitIssue";
       payload: GithubCreateIssuePayload;
+      connectionId?: string;
     }
-  | { type: "github.getIssueBody"; owner: string; repo: string; number: number }
-  | { type: "github.updateIssueBody"; owner: string; repo: string; number: number; body: string }
+  | { type: "github.getIssueBody"; owner: string; repo: string; number: number; connectionId?: string }
+  | { type: "github.updateIssueBody"; owner: string; repo: string; number: number; body: string; connectionId?: string }
   | {
       type: "github.getIssueStatus";
       owner: string;
       repo: string;
       number: number;
+      connectionId?: string;
     }
   | {
       type: "github.updateIssueState";
@@ -151,24 +157,26 @@ export type BgRequest =
       number: number;
       state: "open" | "closed";
       stateReason?: "completed" | "not_planned" | null;
+      connectionId?: string;
     }
   | { type: "linear.oauth.available" }
-  | { type: "linear.startOAuth" }
+  | { type: "linear.startOAuth"; connectionId?: string }
   | { type: "linear.testApiKey"; apiKey: string }
-  | { type: "linear.disconnect" }
-  | { type: "linear.getMyself" }
-  | { type: "linear.getTeams" }
-  | { type: "linear.getProjects"; teamId: string }
-  | { type: "linear.getLabels"; teamId: string }
-  | { type: "linear.getMembers"; teamId: string }
-  | { type: "linear.submitIssue"; payload: LinearCreateIssuePayload }
-  | { type: "linear.uploadFile"; fileId?: string; filename: string; contentType: string; dataUrl: string }
-  | { type: "linear.createAttachment"; issueId: string; title: string; url: string }
-  | { type: "linear.getIssueStatus"; issueId: string }
-  | { type: "linear.getWorkflowStates"; issueIdentifier: string }
-  | { type: "linear.updateIssueState"; issueId: string; stateId: string }
-  | { type: "linear.updateIssueDescription"; issueId: string; description: string }
-  | { type: "linear.getIssueAttachments"; issueId: string }
+  | { type: "linear.disconnect"; connectionId?: string }
+  | { type: "linear.getMyself"; connectionId?: string }
+  | { type: "linear.getOrganization"; connectionId?: string }
+  | { type: "linear.getTeams"; connectionId?: string }
+  | { type: "linear.getProjects"; teamId: string; connectionId?: string }
+  | { type: "linear.getLabels"; teamId: string; connectionId?: string }
+  | { type: "linear.getMembers"; teamId: string; connectionId?: string }
+  | { type: "linear.submitIssue"; payload: LinearCreateIssuePayload; connectionId?: string }
+  | { type: "linear.uploadFile"; fileId?: string; filename: string; contentType: string; dataUrl: string; connectionId?: string }
+  | { type: "linear.createAttachment"; issueId: string; title: string; url: string; connectionId?: string }
+  | { type: "linear.getIssueStatus"; issueId: string; connectionId?: string }
+  | { type: "linear.getWorkflowStates"; issueIdentifier: string; connectionId?: string }
+  | { type: "linear.updateIssueState"; issueId: string; stateId: string; connectionId?: string }
+  | { type: "linear.updateIssueDescription"; issueId: string; description: string; connectionId?: string }
+  | { type: "linear.getIssueAttachments"; issueId: string; connectionId?: string }
   | { type: "notion.oauth.available" }
   | { type: "notion.startOAuth" }
   | { type: "notion.testToken"; token: string }
@@ -314,6 +322,7 @@ export type {
   LinearIssueStatus,
   LinearLabel,
   LinearMyself,
+  LinearOrganization,
   LinearProject,
   LinearTeam,
   LinearUser,
