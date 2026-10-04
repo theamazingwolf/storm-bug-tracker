@@ -16,7 +16,7 @@ Make AI drafting capability-aware and failure-safe without making external model
 
 Allow a safe text-only path. When images are supported and included, keep them user-controlled and bounded. On failures, show a sanitized, actionable explanation and preserve the user's edits and captured evidence for retry. A hypothesis that a particular model rejects screenshots is not a diagnosis; establish the actual request/capability contract before changing provider behavior.
 
-Subscription-based ChatGPT/Codex access is tracked separately by `spike-001-supported-subscription-ai-contract`; do not implement an unverified OAuth flow as part of this issue.
+Subscription-backed ChatGPT transport is separately scoped to the approved Linux helper/extension ticket `issue-002-linux-siwc-helper-extension`. Keep this issue focused on API-key AI drafting capability and error UX; do not duplicate helper/auth work here.
 
 ## Acceptance
 

@@ -1,6 +1,6 @@
 # Storm Bug Tracker: connection routing and AI drafting plan
 
-**Status:** proposed backlog plan; no feature implementation authorized in this bootstrap. Related tickets: `prd-001`, `issue-001`, and `spike-001` in `docs/tasks/1-backlog/`.
+**Status:** approved implementation plan. Parent approved lanes A–E as scoped and the Linux SIWC companion lane F. Related tickets: `prd-001`, `issue-001`, `spike-001`, and `issue-002` in `docs/tasks/`.
 
 ## Current source contracts
 
@@ -16,11 +16,11 @@
 - Capture → explicit user-authorized GitHub/Linear submission → repository backlog → execution is the intended flow. Polling/importing external issues or other external intake automation is not part of this scope.
 - No server-side capture storage, full redesign, billing, hosting, or connector expansion.
 - No live model, auth, GitHub, or Linear calls in tests. No provider credentials or spend.
-- Official OpenAI documentation confirms SIWC for OSS/local personal tools using dynamic registration and `chatgpt.tokens.use.direct`. This does not authorize registration or implementation. The callback is loopback-only (`http://127.0.0.1:<port>/<fixed-path>`), Responses API calls require `store:false` and `stream:true`, model discovery is live, and image support is model-dependent. Do not copy the Noncommercial SDK devkit into this MIT fork. `spike-001` remains blocked until Tim chooses the local helper and specifies the target host OS; no credentials, browser auth, registration, or provider calls.
+- Official OpenAI documentation confirms SIWC for OSS/local personal tools using dynamic registration and `chatgpt.tokens.use.direct`. Tim selected a local helper and Linux first; parent approved implementation in `issue-002`. The callback is loopback-only (`http://127.0.0.1:<port>/<fixed-path>`), Responses API calls require `store:false` and `stream:true`, model discovery is live, and image support is model-dependent. Do not copy the Noncommercial SDK devkit into this MIT fork. Real sign-in, inference, and system installation remain explicit user actions; tests must not launch auth or register a native host.
 
 ## Shared contracts and work lanes
 
-Implement in dependency order after a separate feature-plan approval. Keep file ownership disjoint; contracts below are the integration boundaries.
+Implement only within this approved plan. Parent will dispatch A, E, and F in disjoint worktrees; B, C, and D follow A's stable contract. Keep file ownership disjoint; contracts below are the integration boundaries.
 
 ### Lane A — shared account and routing schema (foundation)
 
@@ -60,13 +60,13 @@ Consume Lane C's `matched | unmatched | ambiguous` result. Store an immutable de
 
 Use captured context and optional user instruction to draft. Support an explicit safe text-only option. Images may be sent only when capability is affirmatively supported by an authoritative provider/model contract or explicit verified user setting; unknown capability defaults to no images. Do not infer vision from a provider/model label. Errors should name a useful next action while sanitizing provider responses and never exposing API keys/headers. On error or cancellation preserve user edits, captured evidence, and retryability. Treat the reported DeepSeek v4 Flash screenshot incompatibility only as an unverified hypothesis until the actual contract/request is checked.
 
-**Independent of:** account/routing feature. Subscription work must wait for Lane F's evidence and a separate approved implementation ticket.
+**Independent of:** account/routing feature. Subscription transport belongs only to the approved Linux helper/extension ticket in Lane F; this lane retains API-key drafting behavior.
 
-### Lane F — subscription-backed AI (blocked)
+### Lane F — Linux SIWC helper and extension integration
 
-**Owns:** `spike-001` only. Parent verification of the current [OpenAI SIWC guide](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) and [preview limitations](https://developers.openai.com/siwc/preview-limitations) confirmed support for OSS/local personal tools via dynamic registration and `chatgpt.tokens.use.direct`. The redirect callback must be `http://127.0.0.1:<port>/<fixed-path>` with the listener active before browser launch; `chromiumapp.org` is not documented. Responses API calls require `store:false` and `stream:true`; discover available models live; image support depends on the selected model. The SDK devkit is Noncommercial and cannot be copied into this MIT repo.
+**Owns:** `issue-002`, the Linux local helper and extension Native Messaging protocol implementation. Use the current [OpenAI SIWC guide](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) and [preview limitations](https://developers.openai.com/siwc/preview-limitations) as the source contract: OSS/local personal tools use dynamic registration and `chatgpt.tokens.use.direct`; the callback is `http://127.0.0.1:<port>/<fixed-path>` and the listener must be active before browser launch; `chromiumapp.org` is not documented. Responses API calls require `store:false` and `stream:true`; discover models live; images depend on the selected model. Do not copy the Noncommercial-licensed SDK devkit into this MIT repo.
 
-Parent recommends a native-messaging local companion, not DNR interception. **Blocked:** wait for Tim to choose the helper approach and specify the target host OS. Do not register an app, access credentials/browser sessions, invoke auth, or call provider endpoints. After the decision, write a platform-specific security design, obtain security review and explicit approval, then create a separate implementation ticket. Lanes A–E (including API-key AI capability/error UX) remain independent.
+Implement the helper/extension protocol and deterministic tests without performing a real sign-in, inference, or system installation. Native-host caller permissions must use an exact extension-ID allowlist supplied for this fork; never use the upstream BugShot extension ID or a wildcard. Tests must not launch auth or register any global/native host. Live sign-in, real inference, and system installation are separate acceptance actions for Tim to perform explicitly later; mock tests do not satisfy live acceptance. Lanes A, E, and F can be dispatched in disjoint worktrees; B/C/D follow A. `spike-001` remains as the verified-contract evidence ticket.
 
 ## Verification plan
 
