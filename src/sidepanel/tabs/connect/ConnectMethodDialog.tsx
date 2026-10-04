@@ -21,6 +21,8 @@ interface ConnectMethodDialogProps {
   // 이미 연결된 플랫폼을 다시 연결하는 경우. 재연동은 계정을 교체하므로(setAccount가 전체
   // 대입) 프로젝트·이슈타입 등 기존 설정이 초기화된다 — 무음 손실을 없애려는 한 줄이다.
   reconnect?: boolean;
+  // 재연동이 설정을 보존하는 플랫폼(GitHub/Linear의 정확한 id 재연동)은 초기화 안내를 끈다.
+  showResetNote?: boolean;
 }
 
 export function ConnectMethodDialog({
@@ -32,6 +34,7 @@ export function ConnectMethodDialog({
   onChooseOAuth,
   onChooseToken,
   reconnect = false,
+  showResetNote = true,
 }: ConnectMethodDialogProps) {
   const t = useT();
 
@@ -52,7 +55,7 @@ export function ConnectMethodDialog({
               정작 경고가 스크린리더에 안 읽힌다. */}
           <DialogDescription>
             {t("platform.connectMethod.body")}
-            {reconnect && (
+            {reconnect && showResetNote && (
               <span className="mt-2 block text-foreground/80">
                 {t("platform.reconnect.note")}
               </span>

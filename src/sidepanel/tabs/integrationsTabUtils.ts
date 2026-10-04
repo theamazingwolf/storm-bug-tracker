@@ -1,6 +1,13 @@
+import type { ReactNode } from "react";
 import type { PlatformId } from "@/types/platform";
 
 export type IntegrationSubTab = "connected" | "add";
+
+export interface TriggerProps {
+  onClick: () => void;
+  connecting: boolean;
+  disabled: boolean;
+}
 
 export interface ConnectFlowProps {
   connected: boolean;
@@ -8,6 +15,11 @@ export interface ConnectFlowProps {
   onConnected: (connectionId?: string) => void;
   // 재연동 대상 record. 없으면 "다른 계정 추가"이고, 있으면 정확히 그 id에만 쓴다(선택 폴백 없음).
   connectionId?: string;
+  // GitHub/Linear 전용 표현 override. 나머지 플랫폼은 무시한다.
+  // 행 단위 재연동처럼 큰 버튼이 어울리지 않는 자리에서 트리거를 바꿔 끼운다.
+  renderTrigger?: (props: TriggerProps) => ReactNode;
+  // 기본 트리거 문구 override (예: "GitHub 계정 추가").
+  triggerLabel?: string;
   // 만료 안내의 [다시 연결]이 지목한 셸이 스스로 한 번 열리게 하는 intent. 연동 탭까지만
   // 데려다주면 사용자가 8개 중에서 그 플랫폼을 다시 찾아야 한다.
   //

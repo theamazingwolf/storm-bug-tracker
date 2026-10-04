@@ -28,7 +28,9 @@ import {
 } from "@/components/ui/alert-dialog";
 import { connectedPlatforms, useSettingsStore } from "@/store/settings-store";
 import { PageFooter, PageScroll, PageShell, Section } from "@/sidepanel/components/Section";
-import { PLATFORM_TAB_KEYS, type PlatformId } from "@/types/platform";
+import { PLATFORM_TAB_KEYS, type Accounts, type PlatformId } from "@/types/platform";
+import type { ConnectionRecords } from "@/types/connection";
+import { DestinationsSection } from "./destinations/DestinationsSection";
 import { trackDisconnect } from "@/sidepanel/lib/track-submit";
 import {
   orderAddPlatforms,
@@ -75,6 +77,17 @@ const PLATFORMS: PlatformEntry[] = [
 
 const GRID_PLATFORMS = PLATFORMS.filter((p): p is GridPlatformEntry => !!p.ConnectFlow);
 
+// GitHub/Linear는 계정이 여럿이라 "연결됨"의 근거가 선택된 계정(accounts)이 아니라 레코드 존재다.
+// 선택된 계정을 지운 뒤에도 남은 계정은 목록에 보여야 한다(자동으로 다른 계정을 고르지 않는다).
+const MULTI_ACCOUNT: readonly PlatformId[] = ["github", "linear"];
+
+function withConnectionRecords(accounts: Accounts, connections: ConnectionRecords): Accounts {
+  const next: Accounts = { ...accounts };
+  if (!next.github && connections.github[0]) next.github = connections.github[0].account;
+  if (!next.linear && connections.linear[0]) next.linear = connections.linear[0].account;
+  return next;
+}
+
 export function IntegrationsTab({
   activeMainTab,
   reconnectPlatform,
@@ -88,10 +101,13 @@ export function IntegrationsTab({
 }) {
   const t = useT();
   const accounts = useSettingsStore((s) => s.accounts);
+  const connections = useSettingsStore((s) => s.connections);
+  const destinationCount = useSettingsStore((s) => s.destinationProfiles.length);
   const removeAllAccounts = useSettingsStore((s) => s.removeAllAccounts);
 
-  const connected = connectedPlatforms(accounts);
+  const connected = connectedPlatforms(withConnectionRecords(accounts, connections));
   const connectedCount = connected.length;
+  const showDestinations = connections.github.length + connections.linear.length + destinationCount > 0;
 
   const [sub, setSub] = useState<IntegrationSubTab>(() =>
     resolveEntrySubTab({ reconnect: reconnectPlatform, connectedCount }),
@@ -173,12 +189,13 @@ export function IntegrationsTab({
                         {t(PLATFORM_TAB_KEYS[id])}
                       </span>
                     }
-                    action={<DisconnectButton id={id} />}
+                    action={MULTI_ACCOUNT.includes(id) ? undefined : <DisconnectButton id={id} />}
                   >
                     <ConnectedBody />
                   </Section>
                 );
               })}
+              {showDestinations && <DestinationsSection />}
             </PageScroll>
             {connectedCount >= 2 && (
               <PageFooter>
@@ -214,13 +231,19 @@ export function IntegrationsTab({
             >
               {orderAddPlatforms(
                 GRID_PLATFORMS.map((p) => p.id),
-                (id) => !!accounts[id],
+                (id) => !MULTI_ACCOUNT.includes(id) && !!accounts[id],
               ).map((id) => {
                 const { ConnectFlow } = GRID_PLATFORMS.find((p) => p.id === id)!;
+                // 다계정 플랫폼의 이 버튼은 항상 "계정 추가"다. 만료 안내의 재연동 intent만 예외로,
+                // 계정이 정확히 하나일 때에 한해 그 계정을 지목한다(여럿이면 어느 것인지 모른다).
+                const multi = MULTI_ACCOUNT.includes(id);
+                const bucket = id === "github" ? connections.github : id === "linear" ? connections.linear : [];
+                const reconnectTarget = multi && reconnectPlatform === id && bucket.length === 1 ? bucket[0].id : undefined;
                 return (
                   <ConnectFlow
                     key={id}
-                    connected={!!accounts[id]}
+                    connected={multi ? !!reconnectTarget : !!accounts[id]}
+                    connectionId={reconnectTarget}
                     autoStart={reconnectPlatform === id}
                     onAutoStartHandled={onReconnectHandled}
                     onConnected={() => {

@@ -3,10 +3,8 @@ import { ExternalLink, Loader2 } from "lucide-react";
 import { SiLinear } from "@icons-pack/react-simple-icons";
 import { toast } from "sonner";
 import { useT } from "@/i18n";
-import { ConnectedBadge } from "@/sidepanel/components/ConnectedBadge";
 import { FieldRow } from "@/sidepanel/components/FieldRow";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -23,20 +21,27 @@ import type {
   LinearOAuthAuth,
 } from "@/types/linear";
 import { sendBg } from "@/lib/bg-client";
-import { AssigneeCombobox } from "@/sidepanel/tabs/linearFields/AssigneeCombobox";
-import { TeamCombobox, type TeamValue } from "@/sidepanel/tabs/linearFields/TeamCombobox";
-import { ProjectCombobox } from "@/sidepanel/tabs/linearFields/ProjectCombobox";
-import { LabelCombobox } from "@/sidepanel/tabs/linearFields/LabelCombobox";
+import { toLocalizedError } from "@/sidepanel/lib/connection-errors";
 import type { ConnectFlowProps } from "@/sidepanel/tabs/integrationsTabUtils";
+import { ConnectionsPanel } from "./ConnectionsPanel";
+import { commitLinearAccount } from "./connectionCommit";
 import { PlatformConnectFlow } from "./PlatformConnectFlow";
 
 export function LinearConnectedBody() {
   return (
-    <>
-      <LinearSummary />
-      <DefaultTeamField />
-      <DefaultIssueSettingsFields />
-    </>
+    <ConnectionsPanel
+      platform="linear"
+      renderReconnect={(record, renderTrigger) => (
+        <LinearConnectFlow
+          connected
+          connectionId={record.id}
+          renderTrigger={renderTrigger}
+          onConnected={() => {}}
+          autoStart={false}
+          onAutoStartHandled={() => {}}
+        />
+      )}
+    />
   );
 }
 
@@ -45,13 +50,31 @@ export function LinearConnectFlow({
   onConnected,
   autoStart,
   onAutoStartHandled,
+  connectionId,
+  renderTrigger,
+  triggerLabel,
 }: ConnectFlowProps) {
+  const t = useT();
+  const existing = useSettingsStore((s) => s.connections.linear.length);
+  const label =
+    triggerLabel ??
+    (!connectionId && existing > 0
+      ? t("connections.addAnother", { platform: t("platform.tab.linear") })
+      : undefined);
   return (
     <PlatformConnectFlow
       connected={connected}
       onConnected={onConnected}
       autoStart={autoStart}
       onAutoStartHandled={onAutoStartHandled}
+      renderTrigger={renderTrigger}
+      triggerLabel={label}
+      preservesSettings
+      commitAccount={(account) =>
+        commitLinearAccount(account, connectionId).catch((err: unknown) => {
+          throw toLocalizedError(t, err);
+        })
+      }
       platform="linear"
       icon={<SiLinear className="h-4 w-4" color="default" />}
       tokenLabelKey="linear.apiKeyButton"
@@ -64,98 +87,14 @@ export function LinearConnectFlow({
         defaults: {},
       })}
       renderTokenDialog={({ open, onOpenChange }) => (
-        <ApiKeyDialog open={open} onOpenChange={onOpenChange} onConnected={onConnected} />
+        <ApiKeyDialog
+          open={open}
+          onOpenChange={onOpenChange}
+          onConnected={onConnected}
+          connectionId={connectionId}
+        />
       )}
     />
-  );
-}
-
-function DefaultTeamField() {
-  const t = useT();
-  const account = useSettingsStore((s) => s.accounts.linear);
-  const updateLinearAccount = useSettingsStore((s) => s.updateLinearAccount);
-  if (!account) return null;
-
-  const value: TeamValue | null =
-    account.defaults.teamId && account.defaults.teamName
-      ? {
-          teamId: account.defaults.teamId,
-          teamName: account.defaults.teamName,
-          teamKey: account.defaults.teamKey ?? "",
-        }
-      : null;
-
-  return (
-    <FieldRow label={t("linear.section.team")}>
-      <TeamCombobox
-        value={value}
-        onChange={(next) =>
-          // project·label·assignee는 team 하위 값이라 team이 바뀌면(교체·해제 모두) 함께 비운다.
-          updateLinearAccount({
-            defaults: {
-              ...account.defaults,
-              teamId: next?.teamId,
-              teamName: next?.teamName,
-              teamKey: next?.teamKey,
-              projectId: undefined,
-              projectName: undefined,
-              labelId: undefined,
-              labelName: undefined,
-              assigneeId: undefined,
-              assigneeName: undefined,
-            },
-          })
-        }
-      />
-    </FieldRow>
-  );
-}
-
-function DefaultIssueSettingsFields() {
-  const t = useT();
-  const account = useSettingsStore((s) => s.accounts.linear);
-  const updateLinearAccount = useSettingsStore((s) => s.updateLinearAccount);
-  if (!account) return null;
-
-  return (
-    <>
-      <FieldRow label={t("linear.field.project")}>
-        <ProjectCombobox
-          teamId={account.defaults.teamId}
-          value={account.defaults.projectId}
-          valueName={account.defaults.projectName}
-          onChange={(projectId, projectName) =>
-            updateLinearAccount({
-              defaults: { ...account.defaults, projectId, projectName },
-            })
-          }
-        />
-      </FieldRow>
-      <FieldRow label={t("linear.field.labels")}>
-        <LabelCombobox
-          teamId={account.defaults.teamId}
-          value={account.defaults.labelId}
-          valueName={account.defaults.labelName}
-          onChange={(labelId, labelName) =>
-            updateLinearAccount({
-              defaults: { ...account.defaults, labelId, labelName },
-            })
-          }
-        />
-      </FieldRow>
-      <FieldRow label={t("linear.field.assignee")}>
-        <AssigneeCombobox
-          teamId={account.defaults.teamId}
-          value={account.defaults.assigneeId}
-          valueName={account.defaults.assigneeName}
-          onChange={(assigneeId, assigneeName) =>
-            updateLinearAccount({
-              defaults: { ...account.defaults, assigneeId, assigneeName },
-            })
-          }
-        />
-      </FieldRow>
-    </>
   );
 }
 
@@ -163,13 +102,14 @@ function ApiKeyDialog({
   open,
   onOpenChange,
   onConnected,
+  connectionId,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  onConnected: () => void;
+  onConnected: (connectionId?: string) => void;
+  connectionId?: string;
 }) {
   const t = useT();
-  const setAccount = useSettingsStore((s) => s.setAccount);
   const [apiKey, setApiKey] = useState("");
   const [validating, setValidating] = useState(false);
 
@@ -191,16 +131,17 @@ function ApiKeyDialog({
           kind: "apiKey",
           apiKey: trimmed,
           viewerName: me.name,
+          viewerId: me.id,
           viewerEmail: me.email,
         },
         defaults: {},
       };
-      setAccount("linear", next);
-      onConnected();
+      const id = await commitLinearAccount(next, connectionId);
+      onConnected(id);
       setApiKey("");
       onOpenChange(false);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : String(err));
+      toast.error(toLocalizedError(t, err).message);
     } finally {
       setValidating(false);
     }
@@ -261,27 +202,5 @@ function ApiKeyDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function LinearSummary() {
-  const t = useT();
-  const account = useSettingsStore((s) => s.accounts.linear);
-  if (!account) return null;
-  const kindLabel = account.auth.kind === "oauth" ? t("linear.auth.kind.oauth") : t("linear.auth.kind.apiKey");
-  const name = account.auth.viewerName || t("linear.viewerLogin");
-
-  return (
-    <div className="flex flex-col gap-1.5">
-      <Card>
-        <CardContent className="flex items-center justify-between px-4 py-3">
-          <div className="flex min-w-0 flex-col">
-            <span className="truncate text-base font-medium text-foreground">{name}</span>
-            <span className="truncate text-sm text-muted-foreground">{account.auth.viewerEmail || "linear.app"}</span>
-          </div>
-          <ConnectedBadge>{kindLabel}</ConnectedBadge>
-        </CardContent>
-      </Card>
-    </div>
   );
 }

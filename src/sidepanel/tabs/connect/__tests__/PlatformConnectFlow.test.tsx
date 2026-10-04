@@ -451,3 +451,112 @@ describe("PlatformConnectFlow — OAuth 실행", () => {
     expect(setAccount).not.toHaveBeenCalled();
   });
 });
+
+describe("PlatformConnectFlow — 다계정 저장 경로 (commitAccount)", () => {
+  function renderCommit(props: {
+    commitAccount?: (a: unknown) => Promise<string | undefined>;
+    preservesSettings?: boolean;
+    connected?: boolean;
+    renderTrigger?: (p: { onClick: () => void; connecting: boolean; disabled: boolean }) => React.ReactNode;
+    triggerLabel?: string;
+  }) {
+    return render(
+      <PlatformConnectFlow
+        connected={props.connected ?? false}
+        onConnected={onConnected}
+        autoStart={false}
+        onAutoStartHandled={onAutoStartHandled}
+        platform="asana"
+        icon={<svg />}
+        tokenLabelKey="asana.patButton"
+        availableRequest={AVAILABLE as never}
+        startOAuthRequest={START as never}
+        buildAccount={buildAccount as never}
+        commitAccount={props.commitAccount as never}
+        preservesSettings={props.preservesSettings}
+        renderTrigger={props.renderTrigger}
+        triggerLabel={props.triggerLabel}
+        renderTokenDialog={({ open }) => (open ? <div data-testid="token-dialog" /> : null)}
+      />,
+    );
+  }
+
+  async function runOAuth() {
+    await waitFor(() => expect(screen.getByRole("button")).not.toHaveProperty("disabled", true));
+    await userEvent.click(screen.getByRole("button"));
+    await userEvent.click(screen.getByRole("button", { name: /connectMethod.oauth/ }));
+  }
+
+  beforeEach(() => {
+    sendBg.mockImplementation((req: { type: string }) =>
+      req.type === AVAILABLE.type ? Promise.resolve({ available: true }) : Promise.resolve(AUTH),
+    );
+  });
+
+  it("commitAccount가 있으면 setAccount를 건드리지 않고 돌려준 id로 onConnected를 부른다", async () => {
+    const commit = vi.fn().mockResolvedValue("conn-1");
+    renderCommit({ commitAccount: commit });
+    await runOAuth();
+    await waitFor(() => expect(onConnected).toHaveBeenCalledWith("conn-1"));
+    expect(commit).toHaveBeenCalledWith(ACCOUNT);
+    expect(setAccount).not.toHaveBeenCalled();
+  });
+
+  it("id가 없으면 onConnected는 인자 없이 불린다", async () => {
+    renderCommit({ commitAccount: vi.fn().mockResolvedValue(undefined) });
+    await runOAuth();
+    await waitFor(() => expect(onConnected).toHaveBeenCalled());
+    expect(onConnected.mock.calls[0]).toEqual([]);
+  });
+
+  it("commitAccount가 던지면 토스트로 알리고 연결 완료를 통보하지 않는다", async () => {
+    renderCommit({ commitAccount: vi.fn().mockRejectedValue(new Error("different account")) });
+    await runOAuth();
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("different account"));
+    expect(onConnected).not.toHaveBeenCalled();
+    expect(setAccount).not.toHaveBeenCalled();
+  });
+
+  it("commitAccount가 없으면 기존 setAccount 경로와 인자 없는 onConnected를 유지한다", async () => {
+    renderCommit({});
+    await runOAuth();
+    await waitFor(() => expect(setAccount).toHaveBeenCalledWith("asana", ACCOUNT));
+    expect(onConnected.mock.calls[0]).toEqual([]);
+  });
+
+  it("설정을 보존하는 재연동은 초기화 안내를 세우지 않는다(토큰 직행)", async () => {
+    sendBg.mockResolvedValue({ available: false });
+    renderCommit({ connected: true, preservesSettings: true });
+    await waitFor(() => expect(screen.getByRole("button")).not.toHaveProperty("disabled", true));
+    await userEvent.click(screen.getByRole("button"));
+    expect(await screen.findByTestId("token-dialog")).toBeTruthy();
+    expect(screen.queryByText(/platform.reconnect.note/)).toBeNull();
+  });
+
+  it("보존하지 않는 재연동은 기존대로 초기화 확인을 먼저 세운다", async () => {
+    sendBg.mockResolvedValue({ available: false });
+    renderCommit({ connected: true });
+    await waitFor(() => expect(screen.getByRole("button")).not.toHaveProperty("disabled", true));
+    await userEvent.click(screen.getByRole("button"));
+    expect(await screen.findByText(/platform.reconnect.note/)).toBeTruthy();
+    expect(screen.queryByTestId("token-dialog")).toBeNull();
+  });
+
+  it("renderTrigger가 기본 버튼을 대체하고 triggerLabel이 문구를 덮는다", async () => {
+    sendBg.mockResolvedValue({ available: false });
+    const { unmount } = renderCommit({
+      renderTrigger: ({ onClick, disabled }) => (
+        <button data-testid="custom" disabled={disabled} onClick={onClick}>
+          custom
+        </button>
+      ),
+    });
+    await waitFor(() => expect(screen.getByTestId("custom")).not.toHaveProperty("disabled", true));
+    await userEvent.click(screen.getByTestId("custom"));
+    expect(await screen.findByTestId("token-dialog")).toBeTruthy();
+    unmount();
+
+    renderCommit({ triggerLabel: "Add another" });
+    expect(screen.getByRole("button").textContent).toContain("Add another");
+  });
+});

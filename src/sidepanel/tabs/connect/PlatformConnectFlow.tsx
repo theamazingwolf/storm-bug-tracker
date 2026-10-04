@@ -28,6 +28,11 @@ interface PlatformConnectFlowProps<P extends PlatformId, A> extends ConnectFlowP
   // 계정 리터럴은 호출부에 남긴다. 여기서 조립하면 excess property check가 사라져
   // optional 필드 오타가 typecheck를 통과한다(POSTMORTEM 2026-08-14).
   buildAccount: (auth: A) => Accounts[P];
+  // 주어지면 setAccount 대신 이걸로 계정을 저장하고, 돌려준 connection id를 onConnected에 싣는다.
+  // GitHub/Linear가 "계정 추가 / 정확한 id 재연동"을 이 자리에서 갈라 처리한다. 던지면 토스트로 보인다.
+  commitAccount?: (account: NonNullable<Accounts[P]>) => Promise<string | undefined>;
+  // 저장된 설정(기본값·제출 목적지)이 재연동에서 보존되는 플랫폼은 "초기화됩니다" 안내를 세우지 않는다.
+  preservesSettings?: boolean;
   renderTokenDialog: (props: {
     open: boolean;
     onOpenChange: (v: boolean) => void;
@@ -45,6 +50,10 @@ export function PlatformConnectFlow<P extends PlatformId, A>({
   availableRequest,
   startOAuthRequest,
   buildAccount,
+  commitAccount,
+  preservesSettings,
+  renderTrigger,
+  triggerLabel,
   renderTokenDialog,
 }: PlatformConnectFlowProps<P, A>) {
   const t = useT();
@@ -74,8 +83,15 @@ export function PlatformConnectFlow<P extends PlatformId, A>({
     setConnecting(true);
     try {
       const auth = await sendBg<A>(startOAuthRequest);
-      setAccount(platform, buildAccount(auth));
-      onConnected();
+      const account = buildAccount(auth);
+      if (commitAccount && account) {
+        const connectionId = await commitAccount(account);
+        if (connectionId === undefined) onConnected();
+        else onConnected(connectionId);
+      } else {
+        setAccount(platform, account);
+        onConnected();
+      }
     } catch (err) {
       if (!isOAuthCancelled(err)) {
         toast.error(err instanceof Error ? err.message : String(err));
@@ -93,7 +109,7 @@ export function PlatformConnectFlow<P extends PlatformId, A>({
     if (connecting) return;
     if (methods.includes("oauth")) {
       setMethodOpen(true);
-    } else if (connected) {
+    } else if (connected && !preservesSettings) {
       // 토큰 직행은 수단 선택 다이얼로그를 안 지나므로 초기화 안내가 없다 —
       // 재연동일 때만 확인을 세운다(ReconnectConfirmDialog 헤더 참조).
       setReconnectConfirmOpen(true);
@@ -109,29 +125,36 @@ export function PlatformConnectFlow<P extends PlatformId, A>({
     start: handleClick,
   });
 
+  const trigger = renderTrigger ? (
+    renderTrigger({ onClick: handleClick, connecting, disabled: methods.length === 0 })
+  ) : (
+    <Button
+      variant="outline"
+      onClick={handleClick}
+      disabled={methods.length === 0}
+      aria-disabled={connecting}
+      className="relative w-full justify-center gap-2 aria-disabled:cursor-not-allowed"
+    >
+      {connecting && (
+        <span className="absolute inset-0 flex items-center justify-center">
+          <Loader2 className="h-4 w-4 animate-spin" />
+        </span>
+      )}
+      <span className={`inline-flex min-w-0 max-w-full items-center gap-2 ${connecting ? "opacity-0" : ""}`}>
+        {icon}
+        <span className="truncate">
+          {triggerLabel ??
+            (connected
+              ? t("platform.reconnect", { platform: platformLabel })
+              : t("platform.connectPlatform", { platform: platformLabel }))}
+        </span>
+      </span>
+    </Button>
+  );
+
   return (
     <>
-      <Button
-        variant="outline"
-        onClick={handleClick}
-        disabled={methods.length === 0}
-        aria-disabled={connecting}
-        className="relative w-full justify-center gap-2 aria-disabled:cursor-not-allowed"
-      >
-        {connecting && (
-          <span className="absolute inset-0 flex items-center justify-center">
-            <Loader2 className="h-4 w-4 animate-spin" />
-          </span>
-        )}
-        <span className={`inline-flex min-w-0 max-w-full items-center gap-2 ${connecting ? "opacity-0" : ""}`}>
-          {icon}
-          <span className="truncate">
-            {connected
-              ? t("platform.reconnect", { platform: platformLabel })
-              : t("platform.connectPlatform", { platform: platformLabel })}
-          </span>
-        </span>
-      </Button>
+      {trigger}
 
       <ReconnectConfirmDialog
         open={reconnectConfirmOpen}
@@ -141,6 +164,7 @@ export function PlatformConnectFlow<P extends PlatformId, A>({
       />
       <ConnectMethodDialog
         reconnect={connected}
+        showResetNote={!preservesSettings}
         open={methodOpen}
         onOpenChange={setMethodOpen}
         platformLabel={platformLabel}

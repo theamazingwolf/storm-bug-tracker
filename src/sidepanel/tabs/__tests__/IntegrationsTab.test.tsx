@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -221,5 +221,102 @@ describe("IntegrationsTab — webhook은 그리드 밖 단독 진입", () => {
     expect(
       screen.getByRole("button", { name: /platform.disconnect.title:platform.tab.webhook/ }),
     ).toBeTruthy();
+  });
+});
+
+describe("IntegrationsTab — GitHub/Linear 다계정", () => {
+  const ghAccount = (login: string) => ({
+    platform: "github" as const,
+    connectedAt: 1,
+    auth: { kind: "pat" as const, pat: `pat-${login}`, viewerLogin: login, viewerId: login.length },
+    defaults: {},
+  });
+  const linAccount = (key: string) => ({
+    platform: "linear" as const,
+    connectedAt: 1,
+    auth: { kind: "apiKey" as const, apiKey: key, viewerName: "Same Viewer", viewerId: "u-1" },
+    defaults: {},
+  });
+
+  function renderTab(reconnectPlatform: "github" | "linear" | null = null) {
+    return render(
+      <IntegrationsTab
+        activeMainTab="integrations"
+        reconnectPlatform={reconnectPlatform}
+        onReconnectHandled={onReconnectHandled}
+      />,
+    );
+  }
+
+  beforeEach(() => {
+    useSettingsStore.setState({
+      accounts: { jira: jiraAccount() },
+      connections: { github: [], linear: [] },
+      selectedConnectionIds: {},
+      destinationProfiles: [],
+      websiteOriginMappings: [],
+    });
+  });
+
+  it("선택된 계정이 없어도 남은 계정이 있으면 GitHub 섹션이 보이고, 자동 선택하지 않는다", async () => {
+    const s = useSettingsStore.getState();
+    s.addConnection("github", ghAccount("alpha"));
+    s.addConnection("github", ghAccount("beta"));
+    useSettingsStore.getState().selectConnection("github", undefined);
+    renderTab();
+    expect(await screen.findByTestId("connections-github")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("connections.noneSelected:platform.tab.github");
+    expect(useSettingsStore.getState().selectedConnectionIds.github).toBeUndefined();
+    // 다계정 플랫폼은 섹션 단위 일괄 해제 대신 행 단위 삭제를 쓴다.
+    expect(
+      screen.queryByRole("button", { name: /platform.disconnect.title:platform.tab.github/ }),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "connections.remove.aria:alpha" })).toBeTruthy();
+    // 다른 연동은 기존 해제 버튼을 유지한다.
+    expect(
+      screen.getByRole("button", { name: /platform.disconnect.title:platform.tab.jira/ }),
+    ).toBeTruthy();
+  });
+
+  it("같은 viewer가 둘 이상의 Linear 워크스페이스에 있어도 각각 별도 행으로 보인다", async () => {
+    const s = useSettingsStore.getState();
+    s.addConnection("linear", linAccount("k1"), { organization: { id: "org-1", name: "Acme" } });
+    s.addConnection("linear", linAccount("k2"), { organization: { id: "org-2", name: "Globex" } });
+    renderTab();
+    expect(await screen.findByText("connections.workspace:Acme,org-1")).toBeTruthy();
+    expect(screen.getByText("connections.workspace:Globex,org-2")).toBeTruthy();
+  });
+
+  it("계정이 이미 있어도 '플랫폼 추가'의 GitHub 버튼은 교체가 아니라 '계정 추가'다", async () => {
+    useSettingsStore.getState().addConnection("github", ghAccount("alpha"));
+    renderTab();
+    await userEvent.click(screen.getByRole("tab", { name: /subtab.add/ }));
+    const grid = await screen.findByTestId("platform-add-grid");
+    await waitFor(() =>
+      expect(within(grid).getByRole("button", { name: /connections.addAnother:platform.tab.github/ })).toBeTruthy(),
+    );
+    expect(within(grid).queryByRole("button", { name: /platform.reconnect:platform.tab.github/ })).toBeNull();
+  });
+
+  it("제출 대상·웹사이트 규칙 섹션은 GitHub/Linear 계정이 있을 때만 뜬다", async () => {
+    const { unmount } = renderTab();
+    expect(screen.queryByTestId("destinations-section")).toBeNull();
+    unmount();
+    useSettingsStore.getState().addConnection("github", ghAccount("alpha"));
+    renderTab();
+    expect(await screen.findByTestId("destinations-section")).toBeTruthy();
+    expect(screen.getByTestId("origins-section")).toBeTruthy();
+  });
+
+  it("계정이 하나뿐일 때 재연동 intent는 초기화 확인 없이 토큰 다이얼로그를 연다", async () => {
+    const s = useSettingsStore.getState();
+    const only = s.addConnection("github", ghAccount("alpha"));
+    sendBg.mockResolvedValue({ available: false });
+    const { unmount } = renderTab("github");
+    // 토큰 직행 + 설정 보존 -> 초기화 확인 없이 토큰 다이얼로그
+    await waitFor(() => expect(onReconnectHandled).toHaveBeenCalled());
+    expect(await screen.findByText("github.patDialog.title")).toBeTruthy();
+    expect(useSettingsStore.getState().connections.github.map((c) => c.id)).toEqual([only]);
+    unmount();
   });
 });
