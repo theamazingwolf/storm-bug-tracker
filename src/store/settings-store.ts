@@ -24,6 +24,8 @@ import type {
   GithubConnection,
   LinearConnection,
   LinearOrganizationProvenance,
+  PutGithubConnectionOptions,
+  PutLinearConnectionOptions,
   RoutablePlatform,
   SelectedConnectionIds,
   WebsiteOriginMapping,
@@ -72,11 +74,13 @@ interface SettingsState {
   /** Populates/refreshes the verified org of an existing Linear connection. Throws on unknown id or a different org id. */
   setLinearConnectionOrganization: (connectionId: string, organization: LinearOrganizationProvenance) => void;
   /**
-   * Reconnect of one exact record. Succeeds only if the new credential is the same GitHub login / same Linear
-   * viewer+organization; then id, defaults, last-submit fields stay. Never falls back to the selected record.
+   * Reconnect of one exact record. Succeeds only if the new credential carries the same immutable provider viewer id
+   * (and, for Linear, the same organization id); then record id, defaults and last-submit fields stay. A record without
+   * a stored id needs `options.verifiedPriorViewerId` (provider proof from its still-valid credential), otherwise it
+   * fails with `identity-unverified`. Display names/logins are never compared. Never falls back to the selected record.
    */
-  putConnectionAccount(platform: "github", connectionId: string, account: GithubAccount): void;
-  putConnectionAccount(platform: "linear", connectionId: string, account: LinearAccount, options?: AddLinearConnectionOptions): void;
+  putConnectionAccount(platform: "github", connectionId: string, account: GithubAccount, options?: PutGithubConnectionOptions): void;
+  putConnectionAccount(platform: "linear", connectionId: string, account: LinearAccount, options?: PutLinearConnectionOptions): void;
   setConnectionLastSubmitFields: <P extends RoutablePlatform>(platform: P, connectionId: string, fields: P extends "github" ? import("@/types/platform").GithubLastSubmitFields : import("@/types/platform").LinearLastSubmitFields) => void;
   lastSubmitFields: LastSubmitFieldsByPlatform;
   lastSubmittedPlatform?: PlatformId;
@@ -327,15 +331,10 @@ function validateDestinationProfile(
   };
 }
 
-function sameGithubLogin(a: GithubAccount, b: GithubAccount): boolean {
-  return a.auth.viewerLogin.toLowerCase() === b.auth.viewerLogin.toLowerCase();
-}
-
-function sameLinearViewer(a: LinearAccount, b: LinearAccount): boolean {
-  if (a.auth.viewerName !== b.auth.viewerName) return false;
-  const ea = a.auth.viewerEmail;
-  const eb = b.auth.viewerEmail;
-  return !ea || !eb || ea.toLowerCase() === eb.toLowerCase();
+function assertSameViewer<T extends number | string>(stored: T | undefined, verifiedPrior: T | undefined, incoming: T | undefined): void {
+  const known = stored ?? verifiedPrior;
+  if (known === undefined || incoming === undefined) throw new ConnectionSettingsError("identity-unverified");
+  if (known !== incoming) throw new ConnectionSettingsError("account-mismatch");
 }
 
 export function isV3Shape(state: unknown): state is V3Shape {
@@ -466,12 +465,13 @@ export const useSettingsStore = create<SettingsState>()(
         if (record.organization && record.organization.id !== id) throw new ConnectionSettingsError("organization-mismatch");
         return { connections: { ...s.connections, linear: s.connections.linear.map((item) => item.id === connectionId ? { ...item, organization: { id, name } } : item) } };
       }),
-      putConnectionAccount: ((platform: RoutablePlatform, connectionId: string, account: GithubAccount | LinearAccount, options?: AddLinearConnectionOptions) => set((s) => {
+      putConnectionAccount: ((platform: RoutablePlatform, connectionId: string, account: GithubAccount | LinearAccount, options?: PutGithubConnectionOptions | PutLinearConnectionOptions) => set((s) => {
         if (platform === "github") {
           const prior = s.connections.github.find((item) => item.id === connectionId);
           if (!prior) throw new ConnectionSettingsError("unknown-connection");
           const next = account as GithubAccount;
-          if (next.platform !== "github" || !sameGithubLogin(prior.account, next)) throw new ConnectionSettingsError("account-mismatch");
+          if (next.platform !== "github") throw new ConnectionSettingsError("account-mismatch");
+          assertSameViewer(prior.account.auth.viewerId, (options as PutGithubConnectionOptions | undefined)?.verifiedPriorViewerId, next.auth.viewerId);
           const merged: GithubAccount = { ...prior.account, auth: next.auth, connectedAt: next.connectedAt };
           return {
             connections: { ...s.connections, github: s.connections.github.map((item) => item.id === connectionId ? { ...item, account: merged } : item) },
@@ -481,8 +481,10 @@ export const useSettingsStore = create<SettingsState>()(
         const prior = s.connections.linear.find((item) => item.id === connectionId);
         if (!prior) throw new ConnectionSettingsError("unknown-connection");
         const next = account as LinearAccount;
-        if (next.platform !== "linear" || !sameLinearViewer(prior.account, next)) throw new ConnectionSettingsError("account-mismatch");
-        const verified = options?.organization;
+        if (next.platform !== "linear") throw new ConnectionSettingsError("account-mismatch");
+        const linearOptions = options as PutLinearConnectionOptions | undefined;
+        assertSameViewer(prior.account.auth.viewerId, linearOptions?.verifiedPriorViewerId, next.auth.viewerId);
+        const verified = linearOptions?.organization;
         if (prior.organization) {
           if (!verified) throw new ConnectionSettingsError("organization-unverified");
           if (verified.id !== prior.organization.id) throw new ConnectionSettingsError("organization-mismatch");

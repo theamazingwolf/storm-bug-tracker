@@ -9,7 +9,9 @@ export type ConnectionSettingsErrorCode =
   | "organization-unverified"
   | "organization-mismatch"
   | "account-mismatch"
-  | "platform-mismatch";
+  | "platform-mismatch"
+  | "duplicate-connection"
+  | "identity-unverified";
 
 /** Thrown by settings-store connection/destination/origin actions. The message never carries credentials. */
 export class ConnectionSettingsError extends Error {

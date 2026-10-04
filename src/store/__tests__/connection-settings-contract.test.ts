@@ -5,16 +5,16 @@ import { ConnectionSettingsError, canonicalMappingOrigin } from "@/lib/connectio
 import { matchWebsiteOrigin } from "@/lib/site-destination-routing";
 import { useSettingsStore } from "../settings-store";
 
-const gh = (login: string, pat = `pat-${login}`): GithubAccount => ({
+const gh = (login: string, pat = `pat-${login}`, viewerId?: number): GithubAccount => ({
   platform: "github",
   connectedAt: 10,
-  auth: { kind: "pat", pat, viewerLogin: login },
+  auth: { kind: "pat", pat, viewerLogin: login, ...(viewerId !== undefined ? { viewerId } : {}) },
   defaults: {},
 });
-const lin = (name: string, key: string, email = "same@example.test"): LinearAccount => ({
+const lin = (name: string, key: string, viewerId?: string, email = "same@example.test"): LinearAccount => ({
   platform: "linear",
   connectedAt: 20,
-  auth: { kind: "apiKey", apiKey: key, viewerName: name, viewerEmail: email },
+  auth: { kind: "apiKey", apiKey: key, viewerName: name, viewerEmail: email, ...(viewerId !== undefined ? { viewerId } : {}) },
   defaults: {},
 });
 
@@ -195,16 +195,16 @@ describe("setLinearConnectionOrganization", () => {
   });
 });
 
-describe("putConnectionAccount (exact-id reconnect)", () => {
-  it("GitHub: same login keeps id/defaults/last-submit and swaps only auth; selected projection follows", () => {
-    const a = state().addConnection("github", gh("octo", "old"));
-    const b = state().addConnection("github", gh("other"));
+describe("putConnectionAccount (exact-id reconnect, immutable viewer ids)", () => {
+  it("GitHub: same id keeps record id/defaults/last-submit even after a login rename; selected projection follows", () => {
+    const a = state().addConnection("github", gh("octo", "old", 11));
+    const b = state().addConnection("github", gh("other", "pat-other", 22));
     state().updateConnection("github", a, { defaults: { owner: "octo", repo: "mono" } });
     state().setConnectionLastSubmitFields("github", a, { owner: "octo", repo: "mono" });
-    state().putConnectionAccount("github", a, { ...gh("OCTO", "new"), connectedAt: 99 });
+    state().putConnectionAccount("github", a, { ...gh("octo-renamed", "new", 11), connectedAt: 99 });
     const rec = state().getConnection("github", a)!;
     expect(rec.id).toBe(a);
-    expect(rec.account.auth).toMatchObject({ pat: "new" });
+    expect(rec.account.auth).toMatchObject({ pat: "new", viewerLogin: "octo-renamed", viewerId: 11 });
     expect(rec.account.defaults).toEqual({ owner: "octo", repo: "mono" });
     expect(rec.lastSubmitFields).toEqual({ owner: "octo", repo: "mono" });
     expect(state().accounts.github).toBe(rec.account);
@@ -212,47 +212,81 @@ describe("putConnectionAccount (exact-id reconnect)", () => {
     expect(state().selectedConnectionIds.github).toBe(a);
   });
 
-  it("GitHub: different login, unknown id, or deleted id fails and replaces nothing (no selection fallback)", () => {
-    const a = state().addConnection("github", gh("octo", "old"));
-    const before = JSON.stringify(state().connections);
-    expect(code(() => state().putConnectionAccount("github", a, gh("intruder", "stolen")))).toBe("account-mismatch");
-    expect(code(() => state().putConnectionAccount("github", "ghost", gh("octo", "new")))).toBe("unknown-connection");
+  it("GitHub: same login but different id is rejected; the old credential survives", () => {
+    const a = state().addConnection("github", gh("octo", "old", 11));
+    expect(code(() => state().putConnectionAccount("github", a, gh("octo", "stolen", 99)))).toBe("account-mismatch");
+    expect(state().getConnection("github", a)?.account.auth).toMatchObject({ pat: "old", viewerId: 11 });
+  });
+
+  it("GitHub: unknown id, deleted id, or a new credential without a viewer id fails and replaces nothing", () => {
+    const a = state().addConnection("github", gh("octo", "old", 11));
+    expect(code(() => state().putConnectionAccount("github", a, gh("octo", "no-id")))).toBe("identity-unverified");
+    expect(code(() => state().putConnectionAccount("github", "ghost", gh("octo", "new", 11)))).toBe("unknown-connection");
     state().removeConnection("github", a);
-    expect(code(() => state().putConnectionAccount("github", a, gh("octo", "new")))).toBe("unknown-connection");
+    expect(code(() => state().putConnectionAccount("github", a, gh("octo", "new", 11)))).toBe("unknown-connection");
     expect(state().connections.github).toEqual([]);
     expect(state().accounts.github).toBeUndefined();
-    expect(before).not.toContain("stolen");
+  });
+
+  it("GitHub legacy record without a stored id: fails closed unless the provider proved the old id", () => {
+    const a = state().addConnection("github", gh("octo", "old"));
+    expect(code(() => state().putConnectionAccount("github", a, gh("octo", "new", 11)))).toBe("identity-unverified");
+    expect(code(() => state().putConnectionAccount("github", a, gh("octo", "new", 11), { verifiedPriorViewerId: 12 }))).toBe("account-mismatch");
+    expect(state().getConnection("github", a)?.account.auth).toMatchObject({ pat: "old" });
+    state().putConnectionAccount("github", a, gh("renamed", "new", 11), { verifiedPriorViewerId: 11 });
+    expect(state().getConnection("github", a)?.account.auth).toMatchObject({ pat: "new", viewerId: 11 });
+  });
+
+  it("GitHub: a stored id wins over a caller-supplied proof", () => {
+    const a = state().addConnection("github", gh("octo", "old", 11));
+    expect(code(() => state().putConnectionAccount("github", a, gh("octo", "new", 12), { verifiedPriorViewerId: 12 }))).toBe("account-mismatch");
   });
 
   it("GitHub: reconnect of a non-selected record does not touch the selected projection", () => {
-    const a = state().addConnection("github", gh("one", "p1"));
-    const b = state().addConnection("github", gh("two", "p2"));
-    state().putConnectionAccount("github", b, gh("two", "p2-new"));
+    const a = state().addConnection("github", gh("one", "p1", 1));
+    const b = state().addConnection("github", gh("two", "p2", 2));
+    state().putConnectionAccount("github", b, gh("two", "p2-new", 2));
     expect(state().selectedConnectionIds.github).toBe(a);
     expect(state().accounts.github?.auth).toMatchObject({ pat: "p1" });
     expect(state().getConnection("github", b)?.account.auth).toMatchObject({ pat: "p2-new" });
   });
 
-  it("Linear: same viewer in a different org cannot overwrite the record; same org may", () => {
-    const o1 = state().addConnection("linear", lin("Same", "k1"), { organization: { id: "org-1", name: "One" } });
-    const o2 = state().addConnection("linear", lin("Same", "k2"), { organization: { id: "org-2", name: "Two" } });
-    state().updateConnection("linear", o1, { defaults: { teamId: "t1" } });
-    expect(code(() => state().putConnectionAccount("linear", o1, lin("Same", "k-org2"), { organization: { id: "org-2", name: "Two" } }))).toBe("organization-mismatch");
-    expect(code(() => state().putConnectionAccount("linear", o1, lin("Same", "k-unverified")))).toBe("organization-unverified");
-    expect(code(() => state().putConnectionAccount("linear", o1, lin("Someone Else", "k-x"), { organization: { id: "org-1", name: "One" } }))).toBe("account-mismatch");
-    expect(state().getConnection("linear", o1)?.account.auth).toMatchObject({ apiKey: "k1" });
-    state().putConnectionAccount("linear", o1, lin("Same", "k1-new"), { organization: { id: "org-1", name: "One (renamed)" } });
-    const rec = state().getConnection("linear", o1)!;
-    expect(rec.account.auth).toMatchObject({ apiKey: "k1-new" });
+  it("Linear: same display name with a different id is rejected; a renamed viewer with the same id is accepted", () => {
+    const id = state().addConnection("linear", lin("Alex", "k1", "u-1"), { organization: { id: "org-1", name: "One" } });
+    state().updateConnection("linear", id, { defaults: { teamId: "t1" } });
+    expect(code(() => state().putConnectionAccount("linear", id, lin("Alex", "k-other", "u-2"), { organization: { id: "org-1", name: "One" } }))).toBe("account-mismatch");
+    state().putConnectionAccount("linear", id, lin("Alexandra", "k1-new", "u-1"), { organization: { id: "org-1", name: "One" } });
+    const rec = state().getConnection("linear", id)!;
+    expect(rec.account.auth).toMatchObject({ apiKey: "k1-new", viewerName: "Alexandra", viewerId: "u-1" });
     expect(rec.account.defaults).toEqual({ teamId: "t1" });
-    expect(rec.organization).toEqual({ id: "org-1", name: "One (renamed)" });
+  });
+
+  it("Linear: the same viewer id in a different workspace can never overwrite the record", () => {
+    const o1 = state().addConnection("linear", lin("Same", "k1", "u-1"), { organization: { id: "org-1", name: "One" } });
+    const o2 = state().addConnection("linear", lin("Same", "k2", "u-1"), { organization: { id: "org-2", name: "Two" } });
+    expect(code(() => state().putConnectionAccount("linear", o1, lin("Same", "k-org2", "u-1"), { organization: { id: "org-2", name: "Two" } }))).toBe("organization-mismatch");
+    expect(code(() => state().putConnectionAccount("linear", o1, lin("Same", "k-unverified", "u-1")))).toBe("organization-unverified");
+    expect(state().getConnection("linear", o1)?.account.auth).toMatchObject({ apiKey: "k1" });
+    state().putConnectionAccount("linear", o1, lin("Same", "k1-new", "u-1"), { organization: { id: "org-1", name: "One (renamed)" } });
+    expect(state().getConnection("linear", o1)?.organization).toEqual({ id: "org-1", name: "One (renamed)" });
     expect(state().getConnection("linear", o2)?.account.auth).toMatchObject({ apiKey: "k2" });
   });
 
-  it("Linear: a legacy record without an org adopts the verified org on a same-viewer reconnect", () => {
+  it("Linear legacy record: needs provider proof of the old id; adopts the verified org once proven", () => {
     const id = state().addConnection("linear", lin("Same", "k"));
-    state().putConnectionAccount("linear", id, lin("Same", "k2"), { organization: { id: "org-1", name: "One" } });
+    const org = { organization: { id: "org-1", name: "One" } };
+    expect(code(() => state().putConnectionAccount("linear", id, lin("Same", "k2", "u-1"), org))).toBe("identity-unverified");
+    expect(code(() => state().putConnectionAccount("linear", id, lin("Same", "k2", "u-1"), { ...org, verifiedPriorViewerId: "u-2" }))).toBe("account-mismatch");
+    expect(state().getConnection("linear", id)?.organization).toBeUndefined();
+    state().putConnectionAccount("linear", id, lin("Same", "k2", "u-1"), { ...org, verifiedPriorViewerId: "u-1" });
     expect(state().getConnection("linear", id)?.organization).toEqual({ id: "org-1", name: "One" });
-    expect(state().getConnection("linear", id)?.account.auth).toMatchObject({ apiKey: "k2" });
+    expect(state().getConnection("linear", id)?.account.auth).toMatchObject({ apiKey: "k2", viewerId: "u-1" });
+  });
+
+  it("Linear: unknown id and a credential without a viewer id fail closed", () => {
+    const id = state().addConnection("linear", lin("Same", "k", "u-1"), { organization: { id: "org-1", name: "One" } });
+    expect(code(() => state().putConnectionAccount("linear", "ghost", lin("Same", "k2", "u-1"), { organization: { id: "org-1", name: "One" } }))).toBe("unknown-connection");
+    expect(code(() => state().putConnectionAccount("linear", id, lin("Same", "k2"), { organization: { id: "org-1", name: "One" } }))).toBe("identity-unverified");
+    expect(state().getConnection("linear", id)?.account.auth).toMatchObject({ apiKey: "k" });
   });
 });

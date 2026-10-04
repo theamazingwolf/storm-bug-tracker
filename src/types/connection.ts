@@ -71,3 +71,16 @@ export interface ConnectionUpdate<P extends RoutablePlatform> {
 export interface AddLinearConnectionOptions {
   organization?: LinearOrganizationProvenance;
 }
+
+/**
+ * Reconnect of one exact record. `verifiedPriorViewerId` is the immutable provider id obtained by
+ * calling the provider with the record's STILL-STORED credential; it is only consulted when the
+ * record predates immutable ids, never inferred from display names.
+ */
+export interface PutGithubConnectionOptions {
+  verifiedPriorViewerId?: number;
+}
+
+export interface PutLinearConnectionOptions extends AddLinearConnectionOptions {
+  verifiedPriorViewerId?: string;
+}
