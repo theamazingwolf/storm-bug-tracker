@@ -24,6 +24,7 @@ import type {
 } from "./github";
 import type {
   LinearAttachmentInput,
+  LinearAuth,
   LinearCreateIssuePayload,
   LinearCreateIssueResult,
   LinearIssueStatus,
@@ -162,6 +163,7 @@ export type BgRequest =
   | { type: "linear.oauth.available" }
   | { type: "linear.startOAuth"; connectionId?: string }
   | { type: "linear.testApiKey"; apiKey: string }
+  | { type: "linear.inspectAuth"; auth: LinearAuth }
   | { type: "linear.disconnect"; connectionId?: string }
   | { type: "linear.getMyself"; connectionId?: string }
   | { type: "linear.getOrganization"; connectionId?: string }

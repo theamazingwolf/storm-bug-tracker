@@ -41,6 +41,7 @@ import {
   updateIssueBody as updateGithubIssueBody,
   updateIssueState as updateGithubIssueState,
   githubFetch,
+  GithubError,
   getMyself as githubGetMyself,
   getRepoAssignees,
   getRepoLabels,
@@ -50,6 +51,9 @@ import { uploadGithubFiles } from "./github-upload";
 import {
   createAttachment as createLinearAttachment,
   createIssue as createLinearIssue,
+  getOrganization as getLinearOrganization,
+  inspectAuth as inspectLinearAuth,
+  LinearError,
   getIssueStatus as getLinearIssueStatus,
   getIssueAttachments as getLinearIssueAttachments,
   getLabels as getLinearLabels,
@@ -138,21 +142,22 @@ import {
 } from "./notion-api";
 import {
   readStoredAuth,
-  readStoredGithubAuth,
-  readStoredLinearAuth,
+  resolveStoredGithubConnectionAuth,
+  resolveStoredLinearConnectionAuth,
   readStoredNotionAuth,
   readStoredGitlabAuth,
   readStoredAsanaAuth,
   readStoredClickupAuth,
   readStoredSlackAuth,
 } from "@/lib/settings-storage";
-import type { LinearAuth } from "@/types/linear";
+import type { LinearAuth, LinearOrganization } from "@/types/linear";
 import type { NotionAuth } from "@/types/notion";
 import type { GitlabAuth } from "@/types/gitlab";
 import type { AsanaAuth } from "@/types/asana";
 import type { ClickupAuth } from "@/types/clickup";
 import type { SlackAuth, SlackCompleteResult } from "@/types/slack";
 import { inlineUploadFilename } from "@/lib/inline-ref";
+import { bindConnectionId } from "./lib/connectionAuthContext";
 
 async function loadAuth(): Promise<JiraAuth> {
   const auth = await readStoredAuth();
@@ -160,16 +165,77 @@ async function loadAuth(): Promise<JiraAuth> {
   return auth;
 }
 
-async function loadGithubAuth(): Promise<GithubAuth> {
-  const auth = await readStoredGithubAuth();
-  if (!auth) throw new Error(t("platform.notConnected.title", { platform: t("platform.tab.github") }));
-  return auth;
+function connectionAuthError(platform: "github" | "linear", status: "ambiguous" | "missing" | "unknown"): Error {
+  const message = status === "ambiguous"
+    ? `Multiple ${platform} connections exist; specify a connectionId.`
+    : status === "unknown"
+      ? `The requested ${platform} connection no longer exists. Add or select a connection and retry.`
+      : t("platform.notConnected.title", { platform: t(`platform.tab.${platform}`) });
+  const body = { code: status === "ambiguous" ? "ambiguous_connection" : "not_connected" };
+  return platform === "github"
+    ? new GithubError(status === "ambiguous" ? 409 : 401, message, body)
+    : new LinearError(status === "ambiguous" ? 409 : 401, message, body);
 }
 
-async function loadLinearAuth(): Promise<LinearAuth> {
-  const auth = await readStoredLinearAuth();
-  if (!auth) throw new Error(t("platform.notConnected.title", { platform: t("platform.tab.linear") }));
-  return auth;
+async function loadGithubAuth(connectionId?: string): Promise<GithubAuth> {
+  const result = await resolveStoredGithubConnectionAuth(connectionId);
+  if (result.status !== "resolved") throw connectionAuthError("github", result.status);
+  return bindConnectionId(result.auth, result.connectionId);
+}
+
+async function loadLinearAuth(connectionId?: string): Promise<LinearAuth> {
+  const result = await resolveStoredLinearConnectionAuth(connectionId);
+  if (result.status !== "resolved") throw connectionAuthError("linear", result.status);
+  return bindConnectionId(result.auth, result.connectionId);
+}
+
+async function startGithubOAuthForConnection(connectionId?: string) {
+  if (connectionId) {
+    const preflight = await resolveStoredGithubConnectionAuth(connectionId);
+    if (preflight.status !== "resolved") throw connectionAuthError("github", preflight.status);
+  }
+  const next = await startGithubOAuth();
+  if (!connectionId) return next;
+  const current = await resolveStoredGithubConnectionAuth(connectionId);
+  if (current.status !== "resolved") throw connectionAuthError("github", current.status);
+  try {
+    const oldAuth = bindConnectionId(current.auth, current.connectionId);
+    const oldId = current.auth.viewerId ?? (await githubGetMyself(oldAuth)).id;
+    if (typeof next.viewerId !== "number" || oldId !== next.viewerId) throw new Error("provider ID mismatch");
+  } catch {
+    throw new GithubError(409, "Could not verify the same GitHub account. Add this account as a new connection instead.", { code: "identity_unverified" });
+  }
+  return next;
+}
+
+async function startLinearOAuthForConnection(connectionId?: string) {
+  if (connectionId) {
+    const preflight = await resolveStoredLinearConnectionAuth(connectionId);
+    if (preflight.status !== "resolved") throw connectionAuthError("linear", preflight.status);
+  }
+  const next = await startLinearOAuth();
+  if (!connectionId) return next;
+  const nextIdentity = await inspectLinearAuth(next);
+  if (typeof next.viewerId !== "string" || nextIdentity.viewer.id !== next.viewerId) {
+    throw new LinearError(409, "Could not verify the new Linear user from the granted credentials.", { code: "identity_unverified" });
+  }
+  const nextOrganization = nextIdentity.organization;
+  if (connectionId) {
+    const current = await resolveStoredLinearConnectionAuth(connectionId);
+    if (current.status !== "resolved") throw connectionAuthError("linear", current.status);
+    try {
+      const oldAuth = bindConnectionId(current.auth, current.connectionId);
+      const oldUserId = current.auth.viewerId ?? (await linearGetMyself(oldAuth)).id;
+      const oldOrganization = await getLinearOrganization(oldAuth);
+      if (typeof next.viewerId !== "string" || oldUserId !== next.viewerId || oldOrganization.id !== nextOrganization.id) {
+        throw new Error("provider identity mismatch");
+      }
+    } catch {
+      throw new LinearError(409, "Could not verify the same Linear user and organization. Add this account as a new connection instead.", { code: "identity_unverified" });
+    }
+  }
+  // Organization provenance is fetched using the newly granted credentials, not the old record.
+  return { ...next, organization: nextOrganization satisfies LinearOrganization };
 }
 
 async function loadNotionAuth(): Promise<NotionAuth> {
@@ -352,11 +418,12 @@ export async function handleMessage(
     case "clickup.getAccountIdentity":
     case "slack.getAccountIdentity":
       if (`${message.destination.platform}.getAccountIdentity` !== message.type) throw new Error("Identity platform mismatch");
-      return { identity: await resolveAccountIdentity(message.destination) };
+      const connectionId = message.type === "github.getAccountIdentity" || message.type === "linear.getAccountIdentity" ? message.connectionId : undefined;
+      return { identity: await resolveAccountIdentity(message.destination, connectionId) };
 
 
     case "github.startOAuth":
-      return trackConnect("github", () => startGithubOAuth());
+      return trackConnect("github", () => startGithubOAuthForConnection(message.connectionId));
 
     case "github.testPat":
       return githubGetMyself({
@@ -370,43 +437,44 @@ export async function handleMessage(
       return { ok: true };
 
     case "github.getMyself":
-      return githubGetMyself(await loadGithubAuth());
+      return githubGetMyself(await loadGithubAuth(message.connectionId));
 
     case "github.searchRepos":
-      return searchRepos(await loadGithubAuth(), message.query);
+      return searchRepos(await loadGithubAuth(message.connectionId), message.query);
 
     case "github.getLabels":
-      return getRepoLabels(await loadGithubAuth(), message.owner, message.repo);
+      return getRepoLabels(await loadGithubAuth(message.connectionId), message.owner, message.repo);
 
     case "github.searchAssignees":
       return getRepoAssignees(
-        await loadGithubAuth(),
+        await loadGithubAuth(message.connectionId),
         message.owner,
         message.repo,
       );
 
     case "github.uploadFiles": {
-      const auth = await loadGithubAuth();
+      const auth = await loadGithubAuth(message.connectionId);
       const repo = await githubFetch<{ id: number }>(
         auth,
         `/repos/${encodeURIComponent(message.owner)}/${encodeURIComponent(message.repo)}`,
       );
-      return uploadGithubFiles(message.owner, message.repo, repo.id, message.files);
+      const account = await githubFetch<{ login: string }>(auth, "/user");
+      return uploadGithubFiles(message.owner, message.repo, repo.id, message.files, account.login);
     }
 
     case "github.submitIssue":
-      return createGithubIssue(await loadGithubAuth(), message.payload);
+      return createGithubIssue(await loadGithubAuth(message.connectionId), message.payload);
 
     case "github.getIssueBody":
-      return { body: await getGithubIssueBody(await loadGithubAuth(), message.owner, message.repo, message.number) };
+      return { body: await getGithubIssueBody(await loadGithubAuth(message.connectionId), message.owner, message.repo, message.number) };
 
     case "github.updateIssueBody":
-      await updateGithubIssueBody(await loadGithubAuth(), message.owner, message.repo, message.number, message.body);
+      await updateGithubIssueBody(await loadGithubAuth(message.connectionId), message.owner, message.repo, message.number, message.body);
       return { ok: true };
 
     case "github.getIssueStatus":
       return getGithubIssueStatus(
-        await loadGithubAuth(),
+        await loadGithubAuth(message.connectionId),
         message.owner,
         message.repo,
         message.number,
@@ -414,7 +482,7 @@ export async function handleMessage(
 
     case "github.updateIssueState":
       return updateGithubIssueState(
-        await loadGithubAuth(),
+        await loadGithubAuth(message.connectionId),
         message.owner,
         message.repo,
         message.number,
@@ -423,7 +491,7 @@ export async function handleMessage(
       );
 
     case "linear.startOAuth":
-      return trackConnect("linear", () => startLinearOAuth());
+      return trackConnect("linear", () => startLinearOAuthForConnection(message.connectionId));
 
     case "linear.testApiKey":
       return linearGetMyself({
@@ -432,58 +500,61 @@ export async function handleMessage(
         viewerName: "",
       });
 
+    case "linear.inspectAuth":
+      return inspectLinearAuth(message.auth);
+
     case "linear.disconnect":
       return { ok: true };
 
     case "linear.getOrganization":
-      throw new Error("Linear organization lookup is not implemented");
+      return getLinearOrganization(await loadLinearAuth(message.connectionId));
 
     case "linear.getMyself":
-      return linearGetMyself(await loadLinearAuth());
+      return linearGetMyself(await loadLinearAuth(message.connectionId));
 
     case "linear.getTeams":
-      return getLinearTeams(await loadLinearAuth());
+      return getLinearTeams(await loadLinearAuth(message.connectionId));
 
     case "linear.getProjects":
-      return getLinearProjects(await loadLinearAuth(), message.teamId);
+      return getLinearProjects(await loadLinearAuth(message.connectionId), message.teamId);
 
     case "linear.getLabels":
-      return getLinearLabels(await loadLinearAuth(), message.teamId);
+      return getLinearLabels(await loadLinearAuth(message.connectionId), message.teamId);
 
     case "linear.getMembers":
-      return getLinearMembers(await loadLinearAuth(), message.teamId);
+      return getLinearMembers(await loadLinearAuth(message.connectionId), message.teamId);
 
     case "linear.submitIssue":
-      return createLinearIssue(await loadLinearAuth(), message.payload);
+      return createLinearIssue(await loadLinearAuth(message.connectionId), message.payload);
 
     case "linear.uploadFile": {
-      const auth = await loadLinearAuth();
+      const auth = await loadLinearAuth(message.connectionId);
       const blob = dataUrlToBlob(message.dataUrl);
       const assetUrl = await uploadFileToLinear(auth, message.filename, message.contentType, blob);
       return { assetUrl, ...(message.fileId ? { fileId: message.fileId } : {}) };
     }
 
     case "linear.createAttachment": {
-      const auth = await loadLinearAuth();
+      const auth = await loadLinearAuth(message.connectionId);
       await createLinearAttachment(auth, message.issueId, message.title, message.url);
       return { ok: true };
     }
 
     case "linear.getIssueStatus":
-      return getLinearIssueStatus(await loadLinearAuth(), message.issueId);
+      return getLinearIssueStatus(await loadLinearAuth(message.connectionId), message.issueId);
 
     case "linear.getWorkflowStates":
-      return getLinearWorkflowStates(await loadLinearAuth(), message.issueIdentifier);
+      return getLinearWorkflowStates(await loadLinearAuth(message.connectionId), message.issueIdentifier);
 
     case "linear.updateIssueState":
-      return updateLinearIssueState(await loadLinearAuth(), message.issueId, message.stateId);
+      return updateLinearIssueState(await loadLinearAuth(message.connectionId), message.issueId, message.stateId);
 
     case "linear.updateIssueDescription":
-      await updateLinearIssueDescription(await loadLinearAuth(), message.issueId, message.description);
+      await updateLinearIssueDescription(await loadLinearAuth(message.connectionId), message.issueId, message.description);
       return { ok: true };
 
     case "linear.getIssueAttachments":
-      return getLinearIssueAttachments(await loadLinearAuth(), message.issueId);
+      return getLinearIssueAttachments(await loadLinearAuth(message.connectionId), message.issueId);
 
     case "notion.startOAuth":
       return trackConnect("notion", () => startNotionOAuth());

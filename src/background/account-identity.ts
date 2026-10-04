@@ -3,9 +3,9 @@ import {
   readStoredAuth,
   readStoredAsanaAuth,
   readStoredClickupAuth,
-  readStoredGithubAuth,
   readStoredGitlabAuth,
-  readStoredLinearAuth,
+  resolveStoredGithubConnectionAuth,
+  resolveStoredLinearConnectionAuth,
   readStoredNotionAuth,
   readStoredSlackAuth,
 } from "@/lib/settings-storage";
@@ -18,6 +18,7 @@ import { NotionError, getBotIdentity as notionGetBotIdentity } from "./notion-ap
 import { AsanaError, asanaFetch, getMyself as asanaGetMyself } from "./asana-api";
 import { ClickupError, clickupFetch, getMyself as clickupGetMyself } from "./clickup-api";
 import { SlackError, getMyself as slackGetMyself } from "./slack-api";
+import { bindConnectionId } from "./lib/connectionAuthContext";
 
 const NOT_CONNECTED = "Platform is not connected";
 // A platform error so the 401 + code survive the message boundary: the retry shows reconnect
@@ -40,7 +41,7 @@ function connected<T>(platform: RetryPlatform, auth: T | null): T {
   return auth;
 }
 
-async function identityParts(destination: Extract<CreatedDestination, { platform: RetryPlatform }>): Promise<Record<string, unknown>> {
+async function identityParts(destination: Extract<CreatedDestination, { platform: RetryPlatform }>, connectionId?: string): Promise<Record<string, unknown>> {
   switch (destination.platform) {
     case "jira": {
       const auth = await ensureFreshAuth(connected("jira", await readStoredAuth()));
@@ -49,15 +50,23 @@ async function identityParts(destination: Extract<CreatedDestination, { platform
     }
     case "github": {
       // GET /user only — getMyself would also read /user/emails, which identity does not need.
-      const me = await githubFetch<{ id?: number }>(connected("github", await readStoredGithubAuth()), "/user");
+      const result = await resolveStoredGithubConnectionAuth(connectionId);
+      if (result.status === "ambiguous") throw new GithubError(409, "Select a GitHub connection before resolving identity", { code: "ambiguous_connection" });
+      if (result.status !== "resolved") throw DISCONNECTED.github();
+      const auth = bindConnectionId(result.auth, result.connectionId);
+      const me = await githubFetch<{ id?: number }>(auth, "/user");
       return { userId: me.id };
     }
     case "gitlab": {
       const auth = connected("gitlab", await readStoredGitlabAuth());
       return { baseUrl: auth.baseUrl, userId: (await gitlabGetMyself(auth)).id };
     }
-    case "linear":
-      return linearGetViewerIdentity(connected("linear", await readStoredLinearAuth()));
+    case "linear": {
+      const result = await resolveStoredLinearConnectionAuth(connectionId);
+      if (result.status === "ambiguous") throw new LinearError(409, "Select a Linear connection before resolving identity", { code: "ambiguous_connection" });
+      if (result.status !== "resolved") throw DISCONNECTED.linear();
+      return linearGetViewerIdentity(bindConnectionId(result.auth, result.connectionId));
+    }
     case "notion": {
       const auth = connected("notion", await readStoredNotionAuth());
       if (auth.kind === "oauth") return { workspaceId: auth.workspaceId, botId: auth.botId };
@@ -86,9 +95,9 @@ async function identityParts(destination: Extract<CreatedDestination, { platform
   }
 }
 
-export async function resolveAccountIdentity(destination: CreatedDestination): Promise<string> {
+export async function resolveAccountIdentity(destination: CreatedDestination, connectionId?: string): Promise<string> {
   if (destination.platform === "webhook") throw new Error("Webhook has no account identity");
-  const identity = attachmentAccountIdentity(destination.platform, await identityParts(destination));
+  const identity = attachmentAccountIdentity(destination.platform, await identityParts(destination, connectionId));
   if (!identity) throw new Error("Account identity unavailable");
   return identity;
 }

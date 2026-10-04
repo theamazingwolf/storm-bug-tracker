@@ -6,6 +6,7 @@ import type {
   LinearFileUploadResult,
   LinearIssueStatus,
   LinearLabel,
+  LinearOrganization,
   LinearMyself,
   LinearProject,
   LinearTeam,
@@ -98,6 +99,25 @@ export async function linearGraphQL<T>(
     throw new LinearError(200, extractLinearErrors(json.errors), json.errors);
   }
   return json.data as T;
+}
+
+export async function inspectAuth(auth: LinearAuth): Promise<{ viewer: LinearMyself; organization: LinearOrganization }> {
+  // Credential-inspection is intentionally a direct, fixed-origin request. It must not enter the
+  // stored-account refresh runner: the candidate auth has not been committed yet.
+  const query = `{ viewer { id name email avatarUrl } organization { id name } }`;
+  const res = await doFetch(auth, query);
+  if (!res.ok) throw new LinearError(res.status, messageForLinearStatus(res.status));
+  const json = await res.json() as {
+    data?: { viewer?: LinearMyself; organization?: LinearOrganization };
+    errors?: Array<{ message?: string; extensions?: unknown }>;
+  };
+  if (json.errors?.length) throw new LinearError(200, extractLinearErrors(json.errors), json.errors);
+  const viewer = json.data?.viewer;
+  const organization = json.data?.organization;
+  if (!viewer?.id || !viewer.name || !organization?.id || !organization.name) {
+    throw new LinearError(200, "Invalid Linear credential identity response");
+  }
+  return { viewer, organization };
 }
 
 export async function getMyself(auth: LinearAuth): Promise<LinearMyself> {
@@ -418,6 +438,13 @@ export async function createAttachment(
     { input: { issueId, title, url } },
   );
   if (result.attachmentCreate?.success !== true) throw new LinearError(200, "Linear attachment was not acknowledged");
+}
+
+export async function getOrganization(auth: LinearAuth): Promise<LinearOrganization> {
+  const data = await linearGraphQL<{ organization?: { id?: string; name?: string } }>(auth, `{ organization { id name } }`);
+  const organization = data.organization;
+  if (!organization?.id || !organization.name) throw new Error("Invalid Linear organization response");
+  return { id: organization.id, name: organization.name };
 }
 
 export async function getViewerIdentity(auth: LinearAuth): Promise<{ userId: string; organizationId: string }> {

@@ -45,6 +45,7 @@ const BG_REQUEST_TYPE_MAP: Record<BgRequest["type"], true> = {
   "linear.oauth.available": true,
   "linear.startOAuth": true,
   "linear.testApiKey": true,
+  "linear.inspectAuth": true,
   "linear.disconnect": true,
   "linear.getMyself": true,
   "linear.getOrganization": true,

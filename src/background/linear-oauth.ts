@@ -1,8 +1,10 @@
 import { inConnectLane } from "./lib/connectLane";
 import { t } from "@/i18n";
 import type { LinearAuth, LinearOAuthAuth } from "@/types/linear";
-import { readStoredLinearAuth, writeStoredLinearOAuthTokens } from "@/lib/settings-storage";
+import { resolveStoredLinearConnectionAuth, writeStoredLinearOAuthTokens } from "@/lib/settings-storage";
 import { pickRotatedAuth } from "./lib/rotatedAuth";
+import { bindConnectionId, connectionIdFromAuth, oauthGrantIdentity } from "./lib/connectionAuthContext";
+import { createConnectionRefreshFlights } from "./lib/connectionRefreshFlights";
 import { getMyself, setLinearRefreshHook } from "./linear-api";
 import { OAuthError, authorizeRejection, base64url, grantRejection, httpReason, launchOAuthWebFlow } from "./oauth";
 import {
@@ -113,7 +115,7 @@ export async function startLinearOAuth(): Promise<LinearOAuthAuth> {
     grantedAt: Date.now(),
   };
   const me = await inConnectLane(() => getMyself(auth));
-  return { ...auth, viewerName: me.name, viewerEmail: me.email };
+  return { ...auth, viewerName: me.name, viewerId: me.id, viewerEmail: me.email };
 }
 
 async function exchangeCode(
@@ -191,7 +193,8 @@ export async function persistLinearOAuthTokens(
   auth: LinearOAuthAuth,
 ): Promise<void> {
   try {
-    await writeStoredLinearOAuthTokens(auth);
+    const saved = await writeStoredLinearOAuthTokens(auth, connectionIdFromAuth(auth));
+    if (saved === false) throw new Error("The Linear connection changed or was removed during token refresh.");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new OAuthError(t("oauth.error.tokenPersist", { message }), {
@@ -200,22 +203,20 @@ export async function persistLinearOAuthTokens(
   }
 }
 
-let refreshInFlight: Promise<LinearAuth> | null = null;
+const refreshFlights = createConnectionRefreshFlights<LinearAuth>();
 
 async function refreshOnceWithLock(auth: LinearAuth): Promise<LinearAuth> {
   if (auth.kind !== "oauth") return auth;
-  if (refreshInFlight) return refreshInFlight;
-  // 락을 잡은 직후 저장분을 다시 본다 — 앞선 요청이 이미 회전을 끝냈다면 인자로 받은
-  // refresh token은 소모된 값이라 invalid_grant가 난다(rotatedAuth 참조).
-  refreshInFlight = (async () => {
-    const stored = await readStoredLinearAuth().catch(() => null);
-    const rotated =
-      stored?.kind === "oauth" ? pickRotatedAuth(auth, stored) : null;
-    return rotated ?? (await refreshLinearToken(auth));
-  })().finally(() => {
-    refreshInFlight = null;
+  const connectionId = connectionIdFromAuth(auth) ?? "legacy-linear";
+  const grant = oauthGrantIdentity(auth);
+  return refreshFlights(connectionId, grant, async () => {
+    const storedResult = await resolveStoredLinearConnectionAuth(connectionId).catch(() => ({ status: "missing" as const }));
+    const stored = storedResult.status === "resolved" ? storedResult.auth : null;
+    const sameGrant = stored?.kind === "oauth" && oauthGrantIdentity(stored) === grant;
+    const rotated = sameGrant ? pickRotatedAuth(auth, stored) : null;
+    if (rotated) return bindConnectionId(rotated, connectionId);
+    return refreshLinearToken(bindConnectionId(auth, connectionId));
   });
-  return refreshInFlight;
 }
 
 setLinearRefreshHook(refreshOnceWithLock);

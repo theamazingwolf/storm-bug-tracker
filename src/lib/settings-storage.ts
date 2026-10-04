@@ -25,7 +25,7 @@ interface SettingsEnvelope {
     };
     connections?: {
       github?: { id: string; account: { auth?: GithubAuth } }[];
-      linear?: { id: string; account: { auth?: LinearAuth } }[];
+      linear?: { id: string; account: { auth?: LinearAuth }; organization?: { id: string; name: string } }[];
     };
     selectedConnectionIds?: { github?: string; linear?: string };
     jiraConfig?: { auth?: JiraAuth };
@@ -139,10 +139,18 @@ export function sameAuthIdentity(
   return true;
 }
 
+let oauthStorageWriteTail: Promise<void> = Promise.resolve();
+
+function serializeOAuthStorageWrite<T>(write: () => Promise<T>): Promise<T> {
+  const result = oauthStorageWriteTail.then(write, write);
+  oauthStorageWriteTail = result.then(() => undefined, () => undefined);
+  return result;
+}
+
 function writer<K extends OAuthAccountKey, A extends OAuthAuthOf<K>>(
   spec: OAuthWriteSpec<K, A>,
-): (auth: A, connectionId?: string) => Promise<void> {
-  return async (auth, connectionId) => {
+): (auth: A, connectionId?: string) => Promise<boolean> {
+  return (auth, connectionId) => serializeOAuthStorageWrite(async () => {
     const { raw, envelope } = await readEnvelope();
     const state = envelope?.state;
     const routeKey = spec.account === "github" || spec.account === "linear" ? spec.account as "github" | "linear" : undefined;
@@ -151,15 +159,19 @@ function writer<K extends OAuthAccountKey, A extends OAuthAuthOf<K>>(
       ? state?.connections?.[routeKey] as Array<{ id: string; account: { auth?: unknown } }> | undefined
       : undefined;
     const selectedRecord = selectedId ? bucket?.find((record) => record.id === selectedId) : undefined;
-    if (selectedId && !selectedRecord) return;
-    if (selectedRecord && !selectedRecord.account.auth) return;
-    if (!connectionId && (spec.account === "github" || spec.account === "linear") && (bucket?.length ?? 0) > 1) return;
+    const legacyAddressed = !!routeKey && !bucket && connectionId === `legacy-${routeKey}`;
+    if (selectedId && !selectedRecord && !legacyAddressed) return false;
+    if (selectedRecord && !selectedRecord.account.auth) return false;
+    if (routeKey && !connectionId && bucket && bucket.length !== 1) return false;
+    if (routeKey && !connectionId && bucket?.length === 1 && !selectedRecord) return false;
     const cur = selectedRecord
       ? selectedRecord.account.auth as AuthOf<K>
-      : state?.accounts?.[spec.account]?.auth;
+      : routeKey && bucket
+        ? undefined
+        : state?.accounts?.[spec.account]?.auth;
     // 판별자 비교는 타입이 봐야 한다 — cur를 Record<string, unknown>으로 눕히면 "oauth2"
     // 같은 오타가 컴파일을 통과하고 5개 writer가 통째로 무음 no-op이 된다.
-    if (!cur || cur.kind !== "oauth") return;
+    if (!cur || cur.kind !== "oauth") return false;
     // 재연동이 상시 경로가 되면서 생긴 창을 막는다: in-flight refresh가 재연동 뒤 resolve하면
     // 토큰 3필드만 구 계정 값으로 덮이고 신원 필드는 새 값으로 남아 `구 토큰 + 신 신원`이 된다.
     // GitLab self-managed면 A 인스턴스 토큰이 B의 baseUrl로 나간다.
@@ -170,7 +182,7 @@ function writer<K extends OAuthAccountKey, A extends OAuthAuthOf<K>>(
         grantIdentityExcluded(spec.account),
       )
     ) {
-      return;
+      return false;
     }
     const target = cur as A;
     for (const field of spec.fields) {
@@ -180,13 +192,28 @@ function writer<K extends OAuthAccountKey, A extends OAuthAuthOf<K>>(
     }
     if (selectedRecord) {
       selectedRecord.account.auth = target;
-      if (routeKey && state?.selectedConnectionIds?.[routeKey] === selectedRecord.id && state.accounts) {
-        (state.accounts[routeKey] as { auth?: unknown } | undefined)!.auth = target;
+      if (routeKey && state?.selectedConnectionIds?.[routeKey] === selectedRecord.id) {
+        if (!state.accounts || typeof state.accounts !== "object" || Array.isArray(state.accounts)) {
+          state.accounts = {};
+        }
+        const accounts = state.accounts as Record<string, unknown>;
+        const projection = accounts[routeKey];
+        if (projection && typeof projection === "object" && !Array.isArray(projection)) {
+          const projectedAuth = (projection as { auth?: unknown }).auth;
+          if (projectedAuth && typeof projectedAuth === "object") {
+            (projection as { auth?: unknown }).auth = target;
+          } else {
+            accounts[routeKey] = selectedRecord.account;
+          }
+        } else {
+          accounts[routeKey] = selectedRecord.account;
+        }
       }
     }
     const next = typeof raw === "string" ? JSON.stringify(envelope) : envelope;
     await chrome.storage.local.set({ [SETTINGS_STORAGE_KEY]: next });
-  };
+    return true;
+  });
 }
 
 export const readStoredAuth = reader(
@@ -195,6 +222,62 @@ export const readStoredAuth = reader(
 );
 export const readStoredGithubAuth = reader("github");
 export const readStoredLinearAuth = reader("linear");
+
+export type StoredConnectionAuthResolution<A, O = never> =
+  | { status: "resolved"; connectionId: string; auth: A; organization?: O }
+  | { status: "ambiguous" | "missing" | "unknown" };
+
+export async function resolveStoredGithubConnectionAuth(
+  connectionId?: string,
+): Promise<StoredConnectionAuthResolution<GithubAuth>> {
+  const { envelope } = await readEnvelope();
+  const state = envelope?.state;
+  const records = state?.connections?.github;
+  if (connectionId) {
+    const record = records?.find((item) => item.id === connectionId);
+    if (record?.account.auth) return { status: "resolved", connectionId, auth: record.account.auth };
+    if (!records && connectionId === "legacy-github" && state?.accounts?.github?.auth) {
+      return { status: "resolved", connectionId, auth: state.accounts.github.auth };
+    }
+    return { status: "unknown" };
+  }
+  if (records) {
+    if (records.length > 1) return { status: "ambiguous" };
+    const selectedId = state?.selectedConnectionIds?.github;
+    const record = selectedId ? records.find((item) => item.id === selectedId) : undefined;
+    return record?.account.auth
+      ? { status: "resolved", connectionId: record.id, auth: record.account.auth }
+      : { status: "missing" };
+  }
+  const auth = state?.accounts?.github?.auth;
+  return auth ? { status: "resolved", connectionId: "legacy-github", auth } : { status: "missing" };
+}
+
+export async function resolveStoredLinearConnectionAuth(
+  connectionId?: string,
+): Promise<StoredConnectionAuthResolution<LinearAuth, { id: string; name: string }>> {
+  const { envelope } = await readEnvelope();
+  const state = envelope?.state;
+  const records = state?.connections?.linear;
+  if (connectionId) {
+    const record = records?.find((item) => item.id === connectionId);
+    if (record?.account.auth) return { status: "resolved", connectionId, auth: record.account.auth, ...(record.organization ? { organization: record.organization } : {}) };
+    if (!records && connectionId === "legacy-linear" && state?.accounts?.linear?.auth) {
+      return { status: "resolved", connectionId, auth: state.accounts.linear.auth };
+    }
+    return { status: "unknown" };
+  }
+  if (records) {
+    if (records.length > 1) return { status: "ambiguous" };
+    const selectedId = state?.selectedConnectionIds?.linear;
+    const record = selectedId ? records.find((item) => item.id === selectedId) : undefined;
+    return record?.account.auth
+      ? { status: "resolved", connectionId: record.id, auth: record.account.auth, ...(record.organization ? { organization: record.organization } : {}) }
+      : { status: "missing" };
+  }
+  const auth = state?.accounts?.linear?.auth;
+  return auth ? { status: "resolved", connectionId: "legacy-linear", auth } : { status: "missing" };
+}
 export const readStoredNotionAuth = reader("notion");
 export const readStoredGitlabAuth = reader("gitlab");
 export const readStoredAsanaAuth = reader("asana");

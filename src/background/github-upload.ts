@@ -46,12 +46,14 @@ async function ensureGithubTab(owner: string, repo: string): Promise<{ tabId: nu
 interface PageUploadResult {
   files: Array<{ fileId?: string; status?: number; name?: string; filename: string; href: string | null }>;
   debug: string[];
+  identityFailure?: boolean;
 }
 
 // MUST be self-contained. chrome.scripting.executeScript serializes this via
 // Function.prototype.toString() and re-evaluates it in the target tab's MAIN
 // world — module-scope references won't survive the boundary.
 async function pageBatchUploadFn(
+  expectedLogin: string,
   repoId: number,
   files: Array<{ fileId?: string; filename: string; contentType: string; dataUrl: string }>,
 ): Promise<PageUploadResult> {
@@ -129,6 +131,14 @@ async function pageBatchUploadFn(
     }
   }
 
+  const sessionLogin = document.querySelector('meta[name="user-login"]')?.getAttribute("content")?.trim();
+  if (!expectedLogin || !sessionLogin || sessionLogin.toLowerCase() !== expectedLogin.toLowerCase()) {
+    return {
+      identityFailure: true,
+      files: files.map((file) => ({ ...(file.fileId ? { fileId: file.fileId } : {}), filename: file.filename, href: null })),
+      debug: ["GitHub browser session could not be verified for the connected account; no files were uploaded."],
+    };
+  }
   const settled = await Promise.all(files.map((f) => uploadOne(f)));
   return {
     files: settled.map((r) => ({ ...(r.fileId ? { fileId: r.fileId } : {}), filename: r.filename, href: r.href, ...(r.status ? { status: r.status } : {}), ...(r.name ? { name: r.name } : {}) })),
@@ -141,6 +151,7 @@ export async function uploadGithubFiles(
   repo: string,
   repoId: number,
   files: GithubUploadFileEntry[],
+  expectedLogin: string,
 ): Promise<UploadFileResult[]> {
   if (files.length === 0) return [];
   // 페이지 주입 함수는 MAIN world라 self-contained여야 하므로 내부 형태({href: null})는
@@ -165,13 +176,21 @@ export async function uploadGithubFiles(
       target: { tabId },
       world: "MAIN",
       func: pageBatchUploadFn,
-      args: [repoId, files],
+      args: [expectedLogin, repoId, files],
     });
     const pageResult = result?.result as PageUploadResult | null;
     if (pageResult?.files.some((f) => f.href === null) && pageResult.debug.length > 0) {
       console.warn("[bugshot] github upload partial failure:", pageResult.debug.join(" | "));
     }
     if (!pageResult) return allFailed();
+    if (pageResult.identityFailure) {
+      return files.map((file) => ({
+        ok: false as const,
+        ...(file.fileId ? { fileId: file.fileId } : {}),
+        filename: file.filename,
+        failure: { stage: "upload" as const, code: "authentication" as const },
+      }));
+    }
     return pageResult.files.map((f) =>
       f.href
         ? { ok: true as const, ...(f.fileId ? { fileId: f.fileId } : {}), filename: f.filename, href: f.href }

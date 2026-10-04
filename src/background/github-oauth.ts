@@ -1,8 +1,10 @@
 import { inConnectLane } from "./lib/connectLane";
 import { t } from "@/i18n";
 import type { GithubAuth, GithubOAuthAuth } from "@/types/github";
-import { readStoredGithubAuth, writeStoredGithubOAuthTokens } from "@/lib/settings-storage";
+import { resolveStoredGithubConnectionAuth, writeStoredGithubOAuthTokens } from "@/lib/settings-storage";
 import { pickRotatedAuth } from "./lib/rotatedAuth";
+import { bindConnectionId, connectionIdFromAuth, oauthGrantIdentity } from "./lib/connectionAuthContext";
+import { createConnectionRefreshFlights } from "./lib/connectionRefreshFlights";
 import { getMyself, setGithubRefreshHook } from "./github-api";
 import { OAuthError, authorizeRejection, grantRejection, httpReason, launchOAuthWebFlow } from "./oauth";
 import {
@@ -103,7 +105,7 @@ export async function startGithubOAuth(): Promise<GithubOAuthAuth> {
     grantedAt: Date.now(),
   };
   const me = await inConnectLane(() => getMyself(auth));
-  return { ...auth, viewerLogin: me.login, viewerEmail: me.email };
+  return { ...auth, viewerLogin: me.login, viewerId: me.id, viewerEmail: me.email };
 }
 
 async function exchangeCodeForTokens(code: string): Promise<GithubTokenResponse> {
@@ -188,7 +190,8 @@ export async function persistGithubOAuthTokens(
   auth: GithubOAuthAuth,
 ): Promise<void> {
   try {
-    await writeStoredGithubOAuthTokens(auth);
+    const saved = await writeStoredGithubOAuthTokens(auth, connectionIdFromAuth(auth));
+    if (saved === false) throw new Error("The GitHub connection changed or was removed during token refresh.");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new OAuthError(t("oauth.error.tokenPersist", { message }), {
@@ -197,22 +200,22 @@ export async function persistGithubOAuthTokens(
   }
 }
 
-let refreshInFlight: Promise<GithubAuth> | null = null;
+const refreshFlights = createConnectionRefreshFlights<GithubAuth>();
 
 async function refreshOnceWithLock(auth: GithubAuth): Promise<GithubAuth> {
   if (auth.kind !== "oauth") return auth;
-  if (refreshInFlight) return refreshInFlight;
-  // 락을 잡은 직후 저장분을 다시 본다 — 앞선 요청이 이미 회전을 끝냈다면 인자로 받은
-  // refresh token은 소모된 값이라 invalid_grant가 난다(rotatedAuth 참조).
-  refreshInFlight = (async () => {
-    const stored = await readStoredGithubAuth().catch(() => null);
-    const rotated =
-      stored?.kind === "oauth" ? pickRotatedAuth(auth, stored) : null;
-    return rotated ?? (await refreshGithubToken(auth));
-  })().finally(() => {
-    refreshInFlight = null;
+  const connectionId = connectionIdFromAuth(auth) ?? "legacy-github";
+  const grant = oauthGrantIdentity(auth);
+  return refreshFlights(connectionId, grant, async () => {
+    // Re-read only the captured connection. A selection change cannot redirect this operation,
+    // and a replacement grant must not be mistaken for a completed rotation.
+    const storedResult = await resolveStoredGithubConnectionAuth(connectionId).catch(() => ({ status: "missing" as const }));
+    const stored = storedResult.status === "resolved" ? storedResult.auth : null;
+    const sameGrant = stored?.kind === "oauth" && oauthGrantIdentity(stored) === grant;
+    const rotated = sameGrant ? pickRotatedAuth(auth, stored) : null;
+    if (rotated) return bindConnectionId(rotated, connectionId);
+    return refreshGithubToken(bindConnectionId(auth, connectionId));
   });
-  return refreshInFlight;
 }
 
 // 모듈 로드 시점에 github-api의 401 refresh hook을 주입.

@@ -5,10 +5,10 @@ let stored: unknown;
 vi.stubGlobal("chrome", {
   storage: {
     local: {
-      get: async (key: string) => ({ [key]: stored }),
-      // write 계열 검증용 — 기록된 값을 그대로 stored에 되돌려 왕복을 관찰한다.
+      get: async (key: string) => ({ [key]: stored === undefined ? undefined : structuredClone(stored) }),
+      // Chrome storage returns/persists structured clones, not shared mutable object references.
       set: async (obj: Record<string, unknown>) => {
-        stored = obj[SETTINGS_STORAGE_KEY];
+        stored = obj[SETTINGS_STORAGE_KEY] === undefined ? undefined : structuredClone(obj[SETTINGS_STORAGE_KEY]);
       },
     },
   },
@@ -178,6 +178,72 @@ describe("플랫폼별 write 계열 (토큰 갱신 영속)", () => {
 
   // GitHub만 `?? cur.X` 폴백 시맨틱이다 — 응답에 refreshToken/expiresAt이 없는 경우가 있어,
   // 이게 단순 대입으로 퇴화하면 기존 refresh token이 undefined로 날아가 무한 재로그인이 된다.
+  it("reconstructs a missing selected compatibility projection from that exact connection", async () => {
+    const current = { kind: "oauth", accessToken: "old", refreshToken: "r0", expiresAt: 1, tokenType: "bearer", scope: "repo", grantedAt: 10, viewerLogin: "octo", viewerId: 42 } as const;
+    stored = envelope({
+      accounts: {},
+      connections: { github: [{ id: "gh-1", account: { platform: "github", auth: current, defaults: { owner: "o" } } }] },
+      selectedConnectionIds: { github: "gh-1" },
+    });
+    const saved = await writeStoredGithubOAuthTokens({ ...current, accessToken: "rotated", refreshToken: "r1", expiresAt: 999 }, "gh-1");
+    expect(saved).toBe(true);
+    expect(readBack().state.accounts.github.auth.accessToken).toBe("rotated");
+    expect(readBack().state.connections.github[0].account.auth.accessToken).toBe("rotated");
+    expect(readBack().state.connections.github[0].account.defaults).toEqual({ owner: "o" });
+  });
+
+  it("rebuilds a corrupt compatibility projection from the selected connection", async () => {
+    const current = { kind: "oauth", accessToken: "old", refreshToken: "r0", expiresAt: 1, tokenType: "bearer", scope: "repo", grantedAt: 10, viewerLogin: "octo", viewerId: 42 } as const;
+    stored = envelope({
+      accounts: "corrupt",
+      connections: { github: [{ id: "gh-1", account: { platform: "github", auth: current, defaults: { owner: "o" } } }] },
+      selectedConnectionIds: { github: "gh-1" },
+    });
+    await expect(writeStoredGithubOAuthTokens({ ...current, accessToken: "rotated", refreshToken: "r1" }, "gh-1")).resolves.toBe(true);
+    expect(readBack().state.accounts.github.auth.accessToken).toBe("rotated");
+    expect(readBack().state.accounts.github.defaults).toEqual({ owner: "o" });
+  });
+
+  it("serializes parallel writes to different connection IDs without losing either rotation", async () => {
+    const first = { kind: "oauth", accessToken: "a-old", refreshToken: "a-r0", expiresAt: 1, tokenType: "bearer", scope: "repo", grantedAt: 10, viewerLogin: "a", viewerId: 1 };
+    const second = { kind: "oauth", accessToken: "b-old", refreshToken: "b-r0", expiresAt: 1, tokenType: "bearer", scope: "repo", grantedAt: 20, viewerLogin: "b", viewerId: 2 };
+    stored = envelope({
+      accounts: { github: { auth: first } },
+      connections: { github: [
+        { id: "gh-1", account: { platform: "github", auth: first, defaults: {} } },
+        { id: "gh-2", account: { platform: "github", auth: second, defaults: {} } },
+      ] },
+      selectedConnectionIds: { github: "gh-1" },
+    });
+    await Promise.all([
+      writeStoredGithubOAuthTokens({ ...first, accessToken: "a-new", refreshToken: "a-r1" } as any, "gh-1"),
+      writeStoredGithubOAuthTokens({ ...second, accessToken: "b-new", refreshToken: "b-r1" } as any, "gh-2"),
+    ]);
+    const connections = readBack().state.connections.github;
+    expect(connections.map((item: { account: { auth: { accessToken: string } } }) => item.account.auth.accessToken)).toEqual(["a-new", "b-new"]);
+  });
+
+  it("rejects a late refresh from an older grant without resurrecting replaced credentials", async () => {
+    const newer = { kind: "oauth", accessToken: "new-grant", refreshToken: "new-refresh", expiresAt: 999, tokenType: "bearer", scope: "repo", grantedAt: 20, viewerLogin: "octo", viewerId: 42 } as const;
+    stored = envelope({
+      accounts: { github: { auth: newer } },
+      connections: { github: [{ id: "gh-1", account: { platform: "github", auth: newer, defaults: {} } }] },
+      selectedConnectionIds: { github: "gh-1" },
+    });
+    const before = structuredClone(stored);
+    await expect(writeStoredGithubOAuthTokens({ ...newer, accessToken: "old-rotated", grantedAt: 10 }, "gh-1")).resolves.toBe(false);
+    expect(readBack()).toEqual(before);
+  });
+
+  it("does not recreate a deleted connection from an in-flight refresh", async () => {
+    stored = envelope({
+      accounts: {}, connections: { github: [] }, selectedConnectionIds: { github: "gh-1" },
+    });
+    const before = structuredClone(stored);
+    await expect(writeStoredGithubOAuthTokens({ kind: "oauth", accessToken: "late", grantedAt: 10 } as any, "gh-1")).resolves.toBe(false);
+    expect(readBack()).toEqual(before);
+  });
+
   it("github: 응답에 refreshToken/expiresAt이 없으면 기존 값을 보존한다", async () => {
     stored = envelope({
       accounts: { github: { auth: { kind: "oauth", accessToken: "old", refreshToken: "keep-me", expiresAt: 42 } } },

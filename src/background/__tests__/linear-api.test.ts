@@ -22,6 +22,8 @@ import {
   getLabels,
   getMembers,
   getMyself,
+  getOrganization,
+  inspectAuth,
   getProjects,
   getTeams,
   getWorkflowStates,
@@ -347,6 +349,27 @@ describe("응답 봉투 — viewer / teams", () => {
   afterEach(() => {
     mf?.restore();
     mf = undefined;
+  });
+
+  it("inspectAuth validates viewer and organization with the candidate credential without refresh", async () => {
+    mf = mockFetchOnce({ body: { data: { viewer: { id: "U_1", name: "Kim" }, organization: { id: "org-2", name: "Org Two" } } } });
+    const candidate = { kind: "oauth", accessToken: "candidate-token", refreshToken: "must-not-refresh", expiresAt: 0, scope: "read", viewerName: "", grantedAt: 1 } as const;
+    await expect(inspectAuth(candidate)).resolves.toEqual({ viewer: { id: "U_1", name: "Kim" }, organization: { id: "org-2", name: "Org Two" } });
+    expect(mf!.callAt(0).url).toBe("https://api.linear.app/graphql");
+    expect((mf!.callAt(0).init?.headers as Record<string, string>).Authorization).toBe("Bearer candidate-token");
+    expect(sentAt(0).query).toContain("viewer { id name email avatarUrl }");
+    expect(mf!.fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("getOrganization returns provider organization identity, independent of viewer identity", async () => {
+    mf = mockFetchOnce({ body: { data: { organization: { id: "org-2", name: "Org Two" }, viewer: { id: "same-viewer", name: "Same Viewer" } } } });
+    await expect(getOrganization(AUTH)).resolves.toEqual({ id: "org-2", name: "Org Two" });
+    expect(sentAt(0).query).toContain("organization { id name }");
+  });
+
+  it("rejects a Linear response without a provider organization", async () => {
+    mf = mockFetchOnce({ body: { data: { organization: { id: "", name: "" } } } });
+    await expect(getOrganization(AUTH)).rejects.toThrow();
   });
 
   it("getMyself는 data.viewer를 그대로 돌려준다", async () => {

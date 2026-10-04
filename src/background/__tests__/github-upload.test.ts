@@ -10,20 +10,31 @@ describe("GitHub MAIN world upload identity", () => {
       return { ok: true, status: 200 };
     });
     vi.stubGlobal("chrome", { tabs: { create: async () => ({ id: 1 }), remove: async () => {}, onUpdated: { addListener: (fn: (id: number, info: { status: string }) => void) => queueMicrotask(() => fn(1, { status: "complete" })), removeListener: () => {} } }, scripting: { executeScript: async ({ func, args }: { func: Function; args: unknown[] }) => {
-      const isolated = runInNewContext(`(${func.toString()})`, { fetch, atob, Blob, FormData, Uint8Array, URL, location: { origin: "https://github.com" } });
+      const isolated = runInNewContext(`(${func.toString()})`, { fetch, atob, Blob, FormData, Uint8Array, URL, location: { origin: "https://github.com" }, document: { querySelector: () => ({ getAttribute: () => "octo" }) } });
       return [{ result: await isolated(...args) }];
     } } });
     const files = ["capture:screenshot", "user:u"].map((fileId) => ({ fileId, filename: "screenshot.webp", contentType: "image/webp", dataUrl: "data:image/webp;base64,QQ==" }));
-    const results = await uploadGithubFiles("o", "r", 1, files);
+    const results = await uploadGithubFiles("o", "r", 1, files, "octo");
     expect(results.map((r) => [r.fileId, r.ok])).toEqual([["capture:screenshot", true], ["user:u", true]]);
     expect(fetch).toHaveBeenCalledTimes(6);
+  });
+  it.each(["other-login", null])("fails closed for a GitHub browser session that is %s", async (sessionLogin) => {
+    const fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+    vi.stubGlobal("chrome", {
+      tabs: { create: async () => ({ id: 1 }), remove: async () => {}, onUpdated: { addListener: (fn: (id: number, info: { status: string }) => void) => queueMicrotask(() => fn(1, { status: "complete" })), removeListener: () => {} } },
+      scripting: { executeScript: async ({ func, args }: { func: Function; args: unknown[] }) => [{ result: await runInNewContext(`(${func.toString()})`, { fetch, atob, Blob, FormData, Uint8Array, URL, location: { origin: "https://github.com" }, document: { querySelector: () => sessionLogin == null ? null : { getAttribute: () => sessionLogin } } })(...args) }] },
+    });
+    const results = await uploadGithubFiles("o", "r", 1, [{ fileId: "f1", filename: "a.png", contentType: "image/png", dataUrl: "data:image/png;base64,QQ==" }], "octo");
+    expect(results[0]).toMatchObject({ ok: false, failure: { stage: "upload", code: "authentication" } });
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
 
 it.each([413, 401, 403, 429, 504])("serialized GitHub policy HTTP %s preserves safe status", async (status) => {
   const fetch = vi.fn(async () => ({ ok: false, status, text: async () => "private response" }));
   vi.stubGlobal("chrome", { tabs: { create: async () => ({ id: 1 }), remove: async () => {}, onUpdated: { addListener: (fn: (id: number, info: { status: string }) => void) => queueMicrotask(() => fn(1, { status: "complete" })), removeListener: () => {} } }, scripting: { executeScript: async ({ func, args }: { func: Function; args: unknown[] }) => [{ result: await runInNewContext(`(${func.toString()})`, { fetch, atob, Blob, FormData, Uint8Array, URL, location: { origin: "https://github.com" } })(...args) }] } });
-  const results = await uploadGithubFiles("o", "r", 1, [{ fileId: "logs", filename: "logs.html", contentType: "text/html", dataUrl: "data:text/html;base64,QQ==" }]);
+  vi.stubGlobal("chrome", { tabs: { create: async () => ({ id: 1 }), remove: async () => {}, onUpdated: { addListener: (fn: (id: number, info: { status: string }) => void) => queueMicrotask(() => fn(1, { status: "complete" })), removeListener: () => {} } }, scripting: { executeScript: async ({ func, args }: { func: Function; args: unknown[] }) => [{ result: await runInNewContext(`(${func.toString()})`, { fetch, atob, Blob, FormData, Uint8Array, URL, location: { origin: "https://github.com" }, document: { querySelector: () => ({ getAttribute: () => "octo" }) } })(...args) }] } });
+  const results = await uploadGithubFiles("o", "r", 1, [{ fileId: "logs", filename: "logs.html", contentType: "text/html", dataUrl: "data:text/html;base64,QQ==" }], "octo");
   expect(results[0]).toMatchObject({ fileId: "logs", ok: false, failure: { stage: "upload", httpStatus: status } });
   expect(JSON.stringify(results)).not.toContain("private");
 });

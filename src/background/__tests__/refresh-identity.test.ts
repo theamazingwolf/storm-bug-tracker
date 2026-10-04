@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/i18n", () => ({ t: (key: string) => key }));
+vi.mock("@/lib/settings-storage", async (original) => ({
+  ...(await original<object>()),
+  writeStoredGithubOAuthTokens: vi.fn(async () => true),
+  writeStoredLinearOAuthTokens: vi.fn(async () => true),
+}));
 
 import { refreshGithubToken } from "../github-oauth";
 import { refreshLinearToken } from "../linear-oauth";
