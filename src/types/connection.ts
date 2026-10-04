@@ -49,6 +49,10 @@ export interface LinearDestinationProfile {
   organizationId: string;
   teamId: string;
   projectId?: string;
+  /** Display-only snapshots captured at save time; routing and requests use the ids. */
+  teamName?: string;
+  teamKey?: string;
+  projectName?: string;
 }
 
 export type DestinationProfile = GithubDestinationProfile | LinearDestinationProfile;

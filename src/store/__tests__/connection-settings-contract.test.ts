@@ -84,6 +84,12 @@ describe("destination profiles", () => {
     expect(state().destinationProfiles).toEqual([{ ...base, connectionId: withOrg, organizationId: "org-1", projectId: "p" }]);
   });
 
+  it("keeps display-only Linear team/project names but drops project name without a project id", () => {
+    const id = state().addConnection("linear", lin("V", "k"), { organization: { id: "org", name: "Org" } });
+    state().saveDestinationProfile({ id: "l", platform: "linear", connectionId: id, organizationId: "org", teamId: "t", teamName: " Core ", teamKey: "CORE", projectName: "ghost" });
+    expect(state().destinationProfiles[0]).toEqual({ id: "l", platform: "linear", connectionId: id, organizationId: "org", teamId: "t", teamName: "Core", teamKey: "CORE" });
+  });
+
   it("removing a profile removes its mappings and keeps unrelated ones", () => {
     const id = state().addConnection("github", gh("octo"));
     state().saveDestinationProfile({ id: "a", platform: "github", connectionId: id, owner: "o", repo: "a" });

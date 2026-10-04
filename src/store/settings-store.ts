@@ -315,7 +315,16 @@ function validateDestinationProfile(
   if (!connection.organization) throw new ConnectionSettingsError("organization-unverified");
   if (connection.organization.id !== organizationId) throw new ConnectionSettingsError("organization-mismatch");
   const projectId = nonEmpty(profile.projectId);
-  return { id, platform: "linear", connectionId, organizationId, teamId, ...(projectId ? { projectId } : {}) };
+  const teamName = nonEmpty(profile.teamName);
+  const teamKey = nonEmpty(profile.teamKey);
+  const projectName = projectId ? nonEmpty(profile.projectName) : undefined;
+  return {
+    id, platform: "linear", connectionId, organizationId, teamId,
+    ...(projectId ? { projectId } : {}),
+    ...(teamName ? { teamName } : {}),
+    ...(teamKey ? { teamKey } : {}),
+    ...(projectName ? { projectName } : {}),
+  };
 }
 
 function sameGithubLogin(a: GithubAccount, b: GithubAccount): boolean {
