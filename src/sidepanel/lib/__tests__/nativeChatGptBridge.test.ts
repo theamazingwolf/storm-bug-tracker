@@ -163,6 +163,24 @@ describe("NativeChatGptBridge", () => {
     expect(port.posted).toHaveLength(0);
   });
 
+  it("counts the four-byte native header at the exact request-size boundary", async () => {
+    const params = draftParams({ text: "" });
+    const empty = JSON.stringify({ id: "storm-chatgpt-1", method: "draft", params });
+    const remaining = NATIVE_REQUEST_MAX_BYTES - 4 - new TextEncoder().encode(empty).byteLength;
+    // JSON escapes null characters to six bytes; text still fits the helper's character cap.
+    params.text = "\0".repeat(Math.floor(remaining / 6)) + "x".repeat(remaining % 6);
+    const { bridge, port } = setup();
+    const pending = bridge.call("draft", params);
+    expect(new TextEncoder().encode(JSON.stringify(port.posted[0])).byteLength + 4).toBe(NATIVE_REQUEST_MAX_BYTES);
+    port.respond({ id: "storm-chatgpt-1", result: { completed: true } });
+    await pending;
+
+    const larger = setup();
+    await expect(larger.bridge.call("draft", { ...params, text: String(params.text) + "x" }))
+      .rejects.toBeInstanceOf(NativeRequestTooLargeError);
+    expect(larger.port.posted).toHaveLength(0);
+  });
+
   it("ignores duplicate completed responses instead of resolving another request", async () => {
     const { bridge, port } = setup();
     const first = bridge.call("status", {});

@@ -78,7 +78,7 @@ export class NativeChatGptBridge {
     } catch {
       throw new NativeProtocolError();
     }
-    if (utf8Bytes(encoded) > NATIVE_REQUEST_MAX_BYTES) {
+    if (utf8Bytes(encoded) + 4 > NATIVE_REQUEST_MAX_BYTES) {
       throw new NativeRequestTooLargeError();
     }
     const port = this.getPort();

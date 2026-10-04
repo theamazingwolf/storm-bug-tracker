@@ -1,4 +1,5 @@
 export const NATIVE_CHATGPT_HOST = "com.storm.bug_tracker.chatgpt";
+// Full native frame budget, including its four-byte length prefix.
 export const NATIVE_REQUEST_MAX_BYTES = 256 * 1024;
 export const NATIVE_INSTRUCTIONS_MAX_BYTES = 16_000;
 
