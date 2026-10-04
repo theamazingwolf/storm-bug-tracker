@@ -61,6 +61,21 @@ function renderDialog(createSession: () => Promise<AISession>) {
 
 describe("AiDraftDialog 취소 레인", () => {
   // 대조군 — 이게 없으면 아래 "적용 안 됨" 단언이 공허해진다(POSTMORTEM 2026-07-28).
+  it("does not log captured content echoed in an unparseable model response", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { session, calls, pending } = makeSession();
+      renderDialog(vi.fn(async () => session));
+      await submit("write it");
+      await waitFor(() => expect(calls.length).toBe(1));
+      pending[0].resolve("private captured content not valid JSON");
+      await waitFor(() => expect(warn).toHaveBeenCalledWith("[bugshot] AI draft parse failed", { responseLength: 39 }));
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("private captured content");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("캡처 컨텍스트만으로 생성할 수 있어 지시는 선택 사항이다", async () => {
     const { session, calls, pending } = makeSession();
     renderDialog(vi.fn(async () => session));

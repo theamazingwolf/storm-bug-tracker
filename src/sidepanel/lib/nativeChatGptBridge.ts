@@ -91,7 +91,7 @@ export class NativeChatGptBridge {
         this.pending.delete(key);
         this.retire(key);
         reject(new NativeRequestTimeoutError());
-        if (method === "draft") void this.sendCancel(id);
+        if (method === "draft" || method === "signIn") void this.sendCancel(id);
       }, timeoutMs);
       const pending: PendingCall = {
         method,
@@ -108,7 +108,7 @@ export class NativeChatGptBridge {
           clearTimeout(timer);
           this.retire(key);
           reject(new NativeRequestCancelledError());
-          if (method === "draft") void this.sendCancel(id);
+          if (method === "draft" || method === "signIn") void this.sendCancel(id);
         };
         options.signal.addEventListener("abort", pending.abortListener, { once: true });
       }

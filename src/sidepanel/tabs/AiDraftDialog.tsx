@@ -320,7 +320,7 @@ export function AiDraftDialog({
           toast.info(t("aiDraft.contextTrimmed"));
         }
       } else {
-        console.warn("[bugshot] AI draft parse failed. Raw response:", raw);
+        console.warn("[bugshot] AI draft parse failed", { responseLength: raw.length });
         toast.error(t("draft.aiParseError"));
       }
     } catch (err) {

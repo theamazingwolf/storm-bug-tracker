@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 export interface NativeChatGptProfile {
   id: string;
-  email: string;
+  email: string | null;
   signedIn: boolean;
   planEnabled: boolean;
 }

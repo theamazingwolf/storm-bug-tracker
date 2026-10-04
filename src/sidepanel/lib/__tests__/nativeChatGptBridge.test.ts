@@ -126,6 +126,25 @@ describe("NativeChatGptBridge", () => {
     }
   });
 
+  it("cancels timed-out sign-in once and ignores its late result without retrying", async () => {
+    vi.useFakeTimers();
+    try {
+      const { bridge, port } = setup();
+      const pending = bridge.call("signIn", {}, { timeoutMs: 20 });
+      const failed = expect(pending).rejects.toBeInstanceOf(NativeRequestTimeoutError);
+      const signInId = (port.posted[0] as { id: string }).id;
+      await vi.advanceTimersByTimeAsync(20);
+      await failed;
+      const cancel = port.posted[1] as { id: string; method: string; params: { requestId: string } };
+      expect(cancel).toMatchObject({ method: "cancel", params: { requestId: signInId } });
+      port.respond({ id: cancel.id, result: { requestId: signInId, cancelled: true } });
+      port.respond({ id: signInId, result: { active: true } });
+      expect(port.posted).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects malformed method parameters before opening the host", async () => {
     const { bridge, port } = setup();
     await expect(bridge.call("draft", draftParams({ instructions: "😀".repeat(4_001) })))

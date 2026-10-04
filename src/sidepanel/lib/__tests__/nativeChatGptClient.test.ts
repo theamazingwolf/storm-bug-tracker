@@ -63,6 +63,31 @@ describe("native ChatGPT helper client", () => {
     expect(JSON.stringify(snapshot)).not.toContain("must-not-retain");
   });
 
+  it("accepts nullable email without discarding other profiles or sign-in success", async () => {
+    const fake = setup();
+    const pending = refreshNativeChatGptSnapshot();
+    fake.respond(0, { connected: false, activeProfileId: null, profile: null, planEnabled: false, imageInput: "unsupported" });
+    await vi.waitFor(() => expect(fake.posted).toHaveLength(2));
+    fake.respond(1, { profiles: [
+      { id: "no-email", email: null, subject: "subject-a", clientId: "client-a", signedIn: true, planEnabled: true },
+      { id: "with-email", email: "user@example.test", subject: "subject-b", clientId: "client-b", signedIn: true, planEnabled: true },
+    ] });
+    await expect(pending).resolves.toMatchObject({ profiles: [
+      { id: "no-email", email: null },
+      { id: "with-email", email: "user@example.test" },
+    ] });
+    const signIn = nativeChatGptSignIn();
+    fake.respond(2, { profileId: "no-email", email: null, planEnabled: true, active: true });
+    await expect(signIn).resolves.toEqual({ profileId: "no-email", email: null, planEnabled: true });
+  });
+
+  it.each([undefined, 42, "x".repeat(321)])("still rejects invalid email metadata: %j", async (email) => {
+    const fake = setup();
+    const signIn = nativeChatGptSignIn();
+    fake.respond(0, { profileId: "p", email, planEnabled: true, active: true });
+    await expect(signIn).rejects.toBeInstanceOf(NativeChatGptError);
+  });
+
   it("passes explicit profile IDs for model discovery and sign-in reconnect", async () => {
     const fake = setup();
     const models = nativeChatGptListModels("p-explicit");

@@ -38,7 +38,7 @@ export function useAI(purpose: AIPurpose = "draft"): {
   const profileId = useSettingsUiStore((s) => s.subscriptionProfileId);
   const modelId = useSettingsUiStore((s) => s.subscriptionModelId);
   const transportConnected = useNativeChatGptUiStore((s) => s.transportConnected);
-  const helperStatus = useNativeChatGptUiStore((s) => s.status);
+  const hasCheckedHelper = useNativeChatGptUiStore((s) => s.hasCheckedHelper);
   const profiles = useNativeChatGptUiStore((s) => s.profiles);
   const models = useNativeChatGptUiStore((s) => s.models);
   const modelsProfileId = useNativeChatGptUiStore((s) => s.modelsProfileId);
@@ -46,7 +46,7 @@ export function useAI(purpose: AIPurpose = "draft"): {
 
   const subscriptionReady = Boolean(
     transportConnected &&
-    helperStatus?.connected &&
+    hasCheckedHelper &&
     profileId &&
     profiles.some((profile) => profile.id === profileId && profile.signedIn && profile.planEnabled) &&
     modelsProfileId === profileId &&

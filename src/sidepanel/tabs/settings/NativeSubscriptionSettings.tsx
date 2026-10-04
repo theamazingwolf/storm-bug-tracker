@@ -44,7 +44,6 @@ export function NativeSubscriptionSettings() {
   const modelId = useSettingsUiStore((state) => state.subscriptionModelId);
   const setProfileId = useSettingsUiStore((state) => state.setSubscriptionProfileId);
   const setModelId = useSettingsUiStore((state) => state.setSubscriptionModelId);
-  const status = useNativeChatGptUiStore((state) => state.status);
   const transportConnected = useNativeChatGptUiStore((state) => state.transportConnected);
   const hasCheckedHelper = useNativeChatGptUiStore((state) => state.hasCheckedHelper);
   const profiles = useNativeChatGptUiStore((state) => state.profiles);
@@ -58,7 +57,10 @@ export function NativeSubscriptionSettings() {
   const [errorKey, setErrorKey] = useState<SubscriptionErrorKey | null>(null);
 
   const selectedProfile = profiles.find((profile) => profile.id === profileId) ?? null;
-  const helperAvailable = Boolean(status?.connected && nativeChatGptBridge.connected);
+  // Helper reachability is independent of its currently active/signed-in profile.
+  const helperAvailable = Boolean(hasCheckedHelper && transportConnected && nativeChatGptBridge.connected);
+  const profileLabel = (profile: { id: string; email: string | null }) =>
+    profile.email || t("llm.subscription.anonymousProfile", { id: profile.id.slice(0, 12) });
   const modelListLoaded = modelsProfileId === profileId;
   const selectedModelValid = Boolean(
     profileId && modelListLoaded && models.some((model) => model.slug === modelId),
@@ -132,8 +134,8 @@ export function NativeSubscriptionSettings() {
             } />
             <StatusRow label={t("llm.subscription.profile")} value={
               !selectedProfile ? t("llm.subscription.noProfile") : selectedProfile.signedIn
-                ? t("llm.subscription.signedIn", { email: selectedProfile.email })
-                : t("llm.subscription.signedOut", { email: selectedProfile.email })
+                ? t("llm.subscription.signedIn", { email: profileLabel(selectedProfile) })
+                : t("llm.subscription.signedOut", { email: profileLabel(selectedProfile) })
             } />
             <StatusRow label={t("llm.subscription.plan")} value={
               selectedProfile?.planEnabled ? t("llm.subscription.planEnabled") : t("llm.subscription.planDisabled")
@@ -169,7 +171,7 @@ export function NativeSubscriptionSettings() {
               <SelectContent>
                 {profiles.map((profile) => (
                   <SelectItem key={profile.id} value={profile.id}>
-                    {profile.email} {!profile.signedIn ? `· ${t("llm.subscription.signedOutShort")}` : ""}
+                    {profileLabel(profile)} {!profile.signedIn ? `· ${t("llm.subscription.signedOutShort")}` : ""}
                   </SelectItem>
                 ))}
               </SelectContent>

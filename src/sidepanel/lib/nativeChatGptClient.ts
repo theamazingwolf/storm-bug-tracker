@@ -44,7 +44,7 @@ function parseProfiles(value: unknown): NativeChatGptProfile[] {
       !isRecord(profile) ||
       !hasOnlyKeys(profile, ["id", "email", "subject", "clientId", "signedIn", "planEnabled"]) ||
       !validId(profile.id) ||
-      typeof profile.email !== "string" || profile.email.length > 320 ||
+      !(profile.email === null || (typeof profile.email === "string" && profile.email.length <= 320)) ||
       typeof profile.subject !== "string" || profile.subject.length > 512 ||
       typeof profile.clientId !== "string" || profile.clientId.length > 256 ||
       typeof profile.signedIn !== "boolean" ||
@@ -86,12 +86,12 @@ function parseModels(value: unknown, expectedProfileId: string): NativeChatGptMo
   });
 }
 
-function parseSignIn(value: unknown): { profileId: string; email: string; planEnabled: boolean } {
+function parseSignIn(value: unknown): { profileId: string; email: string | null; planEnabled: boolean } {
   if (
     !isRecord(value) ||
     !hasOnlyKeys(value, ["profileId", "email", "planEnabled", "active"]) ||
     !validId(value.profileId) ||
-    typeof value.email !== "string" || value.email.length > 320 ||
+    !(value.email === null || (typeof value.email === "string" && value.email.length <= 320)) ||
     typeof value.planEnabled !== "boolean" ||
     value.active !== true
   ) {
@@ -122,7 +122,7 @@ export async function refreshNativeChatGptSnapshot(): Promise<{
 
 export async function nativeChatGptSignIn(profileId?: string): Promise<{
   profileId: string;
-  email: string;
+  email: string | null;
   planEnabled: boolean;
 }> {
   const params: Record<string, unknown> = {};

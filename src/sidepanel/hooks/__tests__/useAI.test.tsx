@@ -32,7 +32,7 @@ describe("useAI ChatGPT subscription selection", () => {
     await expect(result.current.generate({ prompt: "no fallback" })).rejects.toBeInstanceOf(NativeChatGptError);
   });
 
-  it("requires the selected saved profile and discovered model before enabling drafting", () => {
+  it.each([true, false])("uses the pinned profile regardless of active-profile sign-in status (%s)", (connected) => {
     useSettingsUiStore.setState({
       aiProviderPreference: "chatgpt-subscription",
       subscriptionProfileId: "profile-pinned",
@@ -40,8 +40,8 @@ describe("useAI ChatGPT subscription selection", () => {
       llm: null,
     });
     useNativeChatGptUiStore.getState().setSnapshot({
-      connected: true,
-      activeProfileId: "different-active-profile",
+      connected,
+      activeProfileId: connected ? "different-active-profile" : null,
       planEnabled: false,
       imageInput: "unsupported",
     }, [{ id: "profile-pinned", email: "user@example.test", signedIn: true, planEnabled: true }]);
