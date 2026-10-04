@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useT } from "@/i18n";
@@ -30,7 +30,7 @@ interface PlatformConnectFlowProps<P extends PlatformId, A> extends ConnectFlowP
   buildAccount: (auth: A) => Accounts[P];
   // 주어지면 setAccount 대신 이걸로 계정을 저장하고, 돌려준 connection id를 onConnected에 싣는다.
   // GitHub/Linear가 "계정 추가 / 정확한 id 재연동"을 이 자리에서 갈라 처리한다. 던지면 토스트로 보인다.
-  commitAccount?: (account: NonNullable<Accounts[P]>) => Promise<string | undefined>;
+  commitAccount?: (account: NonNullable<Accounts[P]>, signal: AbortSignal) => Promise<string | undefined>;
   // 저장된 설정(기본값·제출 목적지)이 재연동에서 보존되는 플랫폼은 "초기화됩니다" 안내를 세우지 않는다.
   preservesSettings?: boolean;
   renderTokenDialog: (props: {
@@ -79,13 +79,22 @@ export function PlatformConnectFlow<P extends PlatformId, A>({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [platform]);
 
+  // 언마운트된 셸의 늦은 응답이 나중에 계정을 추가·교체하지 못하게 하는 세대 게이트.
+  const attemptRef = useRef<AbortController | null>(null);
+  useEffect(() => () => attemptRef.current?.abort(), []);
+
   async function startOAuth() {
+    attemptRef.current?.abort();
+    const attempt = new AbortController();
+    attemptRef.current = attempt;
     setConnecting(true);
     try {
       const auth = await sendBg<A>(startOAuthRequest);
+      if (attempt.signal.aborted) return;
       const account = buildAccount(auth);
       if (commitAccount && account) {
-        const connectionId = await commitAccount(account);
+        const connectionId = await commitAccount(account, attempt.signal);
+        if (attempt.signal.aborted) return;
         if (connectionId === undefined) onConnected();
         else onConnected(connectionId);
       } else {
@@ -93,11 +102,11 @@ export function PlatformConnectFlow<P extends PlatformId, A>({
         onConnected();
       }
     } catch (err) {
-      if (!isOAuthCancelled(err)) {
+      if (!attempt.signal.aborted && !isOAuthCancelled(err)) {
         toast.error(err instanceof Error ? err.message : String(err));
       }
     } finally {
-      setConnecting(false);
+      if (!attempt.signal.aborted) setConnecting(false);
     }
   }
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ExternalLink, Loader2 } from "lucide-react";
 import { SiLinear } from "@icons-pack/react-simple-icons";
 import { toast } from "sonner";
@@ -70,8 +70,8 @@ export function LinearConnectFlow({
       renderTrigger={renderTrigger}
       triggerLabel={label}
       preservesSettings
-      commitAccount={(account) =>
-        commitLinearAccount(account, connectionId).catch((err: unknown) => {
+      commitAccount={(account, signal) =>
+        commitLinearAccount(account, connectionId, signal).catch((err: unknown) => {
           throw toLocalizedError(t, err);
         })
       }
@@ -112,12 +112,22 @@ function ApiKeyDialog({
   const t = useT();
   const [apiKey, setApiKey] = useState("");
   const [validating, setValidating] = useState(false);
+  // 검증 중 다이얼로그를 닫거나 언마운트하면 늦게 끝난 응답이 계정을 저장하지 못하게 한다.
+  const attemptRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    if (open) return;
+    attemptRef.current?.abort();
+    setValidating(false);
+  }, [open]);
+  useEffect(() => () => attemptRef.current?.abort(), []);
 
   const trimmed = apiKey.trim();
   const canValidate = !!trimmed && !validating;
 
   async function handleValidate() {
     if (validating) return;
+    const attempt = new AbortController();
+    attemptRef.current = attempt;
     setValidating(true);
     try {
       const me = await sendBg<LinearMyself>({
@@ -136,14 +146,15 @@ function ApiKeyDialog({
         },
         defaults: {},
       };
-      const id = await commitLinearAccount(next, connectionId);
+      const id = await commitLinearAccount(next, connectionId, attempt.signal);
+      if (attempt.signal.aborted) return;
       onConnected(id);
       setApiKey("");
       onOpenChange(false);
     } catch (err) {
-      toast.error(toLocalizedError(t, err).message);
+      if (!attempt.signal.aborted) toast.error(toLocalizedError(t, err).message);
     } finally {
-      setValidating(false);
+      if (!attempt.signal.aborted) setValidating(false);
     }
   }
 

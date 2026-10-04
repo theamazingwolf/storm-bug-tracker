@@ -454,7 +454,7 @@ describe("PlatformConnectFlow — OAuth 실행", () => {
 
 describe("PlatformConnectFlow — 다계정 저장 경로 (commitAccount)", () => {
   function renderCommit(props: {
-    commitAccount?: (a: unknown) => Promise<string | undefined>;
+    commitAccount?: (a: unknown, signal: AbortSignal) => Promise<string | undefined>;
     preservesSettings?: boolean;
     connected?: boolean;
     renderTrigger?: (p: { onClick: () => void; connecting: boolean; disabled: boolean }) => React.ReactNode;
@@ -498,7 +498,7 @@ describe("PlatformConnectFlow — 다계정 저장 경로 (commitAccount)", () =
     renderCommit({ commitAccount: commit });
     await runOAuth();
     await waitFor(() => expect(onConnected).toHaveBeenCalledWith("conn-1"));
-    expect(commit).toHaveBeenCalledWith(ACCOUNT);
+    expect(commit).toHaveBeenCalledWith(ACCOUNT, expect.any(AbortSignal));
     expect(setAccount).not.toHaveBeenCalled();
   });
 
@@ -558,5 +558,45 @@ describe("PlatformConnectFlow — 다계정 저장 경로 (commitAccount)", () =
 
     renderCommit({ triggerLabel: "Add another" });
     expect(screen.getByRole("button").textContent).toContain("Add another");
+  });
+});
+
+describe("PlatformConnectFlow — 버려진 시도", () => {
+  it("커밋이 진행 중일 때 언마운트하면 신호가 abort되고 완료 통보·토스트가 없다", async () => {
+    let signal: AbortSignal | undefined;
+    let release!: (id: string) => void;
+    const commit = vi.fn((_a: unknown, s: AbortSignal) => {
+      signal = s;
+      return new Promise<string | undefined>((r) => (release = r));
+    });
+    sendBg.mockImplementation((req: { type: string }) =>
+      req.type === AVAILABLE.type ? Promise.resolve({ available: true }) : Promise.resolve(AUTH),
+    );
+    const { unmount } = render(
+      <PlatformConnectFlow
+        connected={false}
+        onConnected={onConnected}
+        autoStart={false}
+        onAutoStartHandled={onAutoStartHandled}
+        platform="asana"
+        icon={<svg />}
+        tokenLabelKey="asana.patButton"
+        availableRequest={AVAILABLE as never}
+        startOAuthRequest={START as never}
+        buildAccount={buildAccount as never}
+        commitAccount={commit as never}
+        renderTokenDialog={() => null}
+      />,
+    );
+    await waitFor(() => expect(screen.getByRole("button")).not.toHaveProperty("disabled", true));
+    await userEvent.click(screen.getByRole("button"));
+    await userEvent.click(screen.getByRole("button", { name: /connectMethod.oauth/ }));
+    await waitFor(() => expect(commit).toHaveBeenCalled());
+    unmount();
+    expect(signal?.aborted).toBe(true);
+    release("late-id");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(onConnected).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
   });
 });
