@@ -104,7 +104,7 @@ async function tokenPost(body, fetchImpl, signal, timeoutMs = 30_000) {
 }
 
 export async function verifyIdToken(idToken, { clientId, nonce, jwks = createRemoteJWKSet(new URL(JWKS_URL)), verify = jwtVerify } = {}) {
-  const { payload } = await verify(idToken, jwks, { issuer: ISSUER, audience: clientId, algorithms: ["RS256"], clockTolerance: 5 });
+  const { payload } = await verify(idToken, jwks, { issuer: ISSUER, audience: clientId, algorithms: ["RS256"], requiredClaims: ["exp"], clockTolerance: 5 });
   if (typeof payload.sub !== "string" || !payload.sub || (nonce !== undefined && payload.nonce !== nonce)) throw new Error("invalid_identity_token");
   return { subject: payload.sub, email: typeof payload.email === "string" ? payload.email : null, issuer: ISSUER };
 }

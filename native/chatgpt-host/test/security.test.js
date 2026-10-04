@@ -16,6 +16,7 @@ import { listenLoopback, openOfficialAuthUrl, refreshProfile, signIn, verifyIdTo
 import { EventEmitter } from "node:events";
 import { createServer, request as httpRequest } from "node:http";
 import { createHash } from "node:crypto";
+import { generateKeyPair, SignJWT } from "jose";
 
 const EXT = "abcdefghijklmnopabcdefghijklmnop";
 const tempDir = () => mkdtemp(join(tmpdir(), "storm-chatgpt-helper-"));
@@ -350,6 +351,23 @@ test("sign-in checks requested identity and cancellation before persistence or b
   const browserFailure = openOfficialAuthUrl(attempt.authorizeUrl, () => child);
   queueMicrotask(() => child.emit("error", new Error("private operating-system detail")));
   await assert.rejects(browserFailure, /browser_open_failed/);
+});
+
+test("real JOSE verification rejects missing or expired ID-token expiry", async () => {
+  // Ephemeral synthetic keys stay in memory; no provider or stored credentials are used.
+  const { privateKey, publicKey } = await generateKeyPair("RS256");
+  const makeToken = (expiresAt) => {
+    const token = new SignJWT({ sub: "synthetic-user", nonce: "synthetic-nonce" })
+      .setProtectedHeader({ alg: "RS256" })
+      .setIssuer("https://auth.openai.com")
+      .setAudience("synthetic-client");
+    if (expiresAt !== undefined) token.setExpirationTime(expiresAt);
+    return token.sign(privateKey);
+  };
+  const options = { clientId: "synthetic-client", nonce: "synthetic-nonce", jwks: publicKey };
+  await assert.rejects(verifyIdToken(await makeToken(), options), (error) => error.claim === "exp");
+  await assert.rejects(verifyIdToken(await makeToken(Math.floor(Date.now() / 1000) - 60), options), (error) => error.code === "ERR_JWT_EXPIRED");
+  assert.equal((await verifyIdToken(await makeToken(Math.floor(Date.now() / 1000) + 60), options)).subject, "synthetic-user");
 });
 
 test("ID token validation delegates cryptography to jose and checks nonce and identity", async () => {
