@@ -40,6 +40,10 @@ function envelope(state: unknown) {
   return { state, version: 8 };
 }
 
+function readBack(): any {
+  return typeof stored === "string" ? JSON.parse(stored) : stored;
+}
+
 beforeEach(() => {
   stored = undefined;
 });
@@ -134,10 +138,6 @@ describe("플랫폼별 write 계열 (토큰 갱신 영속)", () => {
     ["gitlab", writeStoredGitlabOAuthTokens],
     ["asana", writeStoredAsanaOAuthTokens],
   ] as const;
-
-  function readBack(): any {
-    return typeof stored === "string" ? JSON.parse(stored) : stored;
-  }
 
   it.each(cases)("%s: oauth 계정의 accessToken을 갱신해 저장한다", async (platform, write) => {
     stored = envelope({
@@ -472,5 +472,53 @@ describe("sameAuthIdentity — 스칼라가 아닌 값", () => {
 
   it("한쪽이 undefined인 키는 기존대로 건너뛴다", () => {
     expect(sameAuthIdentity({ h: [1], x: undefined }, { h: [1] }, [])).toBe(true);
+  });
+});
+
+describe("connection-scoped OAuth storage", () => {
+  it("legacy selected refresh keeps its connection auth and compatibility projection in sync", async () => {
+    const original = { kind: "oauth", accessToken: "old", tokenType: "bearer", scope: "repo", refreshToken: "r0", expiresAt: 1, viewerLogin: "octo", grantedAt: 10 };
+    stored = envelope({
+      accounts: { github: { auth: structuredClone(original) } },
+      connections: { github: [{ id: "gh-1", account: { auth: structuredClone(original), defaults: { repo: "mono" } } }] },
+      selectedConnectionIds: { github: "gh-1" },
+    });
+    await writeStoredGithubOAuthTokens({ ...original, accessToken: "new", refreshToken: "r1", expiresAt: 2 } as never);
+    const state = readBack().state;
+    expect(state.connections.github[0].account.auth).toEqual(state.accounts.github.auth);
+    expect(state.connections.github[0].account.auth).toMatchObject({ accessToken: "new", refreshToken: "r1", expiresAt: 2 });
+    expect(state.connections.github[0].account.defaults).toEqual({ repo: "mono" });
+  });
+
+  it("legacy refresh without stable identity is a no-op when multiple connections exist", async () => {
+    const auth = (token: string) => ({ kind: "oauth", accessToken: token, tokenType: "bearer", scope: "repo", refreshToken: `${token}-r`, expiresAt: 1, viewerLogin: "octo", grantedAt: 10 });
+    stored = envelope({
+      accounts: { github: { auth: auth("selected") } },
+      connections: { github: [
+        { id: "gh-selected", account: { auth: auth("selected") } },
+        { id: "gh-other", account: { auth: auth("other") } },
+      ] },
+      selectedConnectionIds: { github: "gh-selected" },
+    });
+    const before = structuredClone(readBack());
+    await writeStoredGithubOAuthTokens({ ...auth("other"), accessToken: "wrong-target" } as never);
+    expect(readBack()).toEqual(before);
+  });
+
+  it("explicit connection identity updates only that non-selected connection", async () => {
+    const auth = (token: string) => ({ kind: "oauth", accessToken: token, tokenType: "bearer", scope: "repo", refreshToken: `${token}-r`, expiresAt: 1, viewerLogin: "octo", grantedAt: 10 });
+    stored = envelope({
+      accounts: { github: { auth: auth("selected") } },
+      connections: { github: [
+        { id: "gh-selected", account: { auth: auth("selected") } },
+        { id: "gh-other", account: { auth: auth("other") } },
+      ] },
+      selectedConnectionIds: { github: "gh-selected" },
+    });
+    await writeStoredGithubOAuthTokens({ ...auth("other"), accessToken: "rotated", refreshToken: "rotated-r" } as never, "gh-other");
+    const state = readBack().state;
+    expect(state.connections.github[0].account.auth.accessToken).toBe("selected");
+    expect(state.accounts.github.auth.accessToken).toBe("selected");
+    expect(state.connections.github[1].account.auth.accessToken).toBe("rotated");
   });
 });

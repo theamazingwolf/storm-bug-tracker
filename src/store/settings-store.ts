@@ -16,6 +16,17 @@ import type { AsanaAccount } from "@/types/asana";
 import type { ClickupAccount } from "@/types/clickup";
 import type { SlackAccount } from "@/types/slack";
 import type { WebhookAccount } from "@/types/webhook";
+import type {
+  AddLinearConnectionOptions,
+  ConnectionRecords,
+  ConnectionUpdate,
+  DestinationProfile,
+  GithubConnection,
+  LinearConnection,
+  RoutablePlatform,
+  SelectedConnectionIds,
+  WebsiteOriginMapping,
+} from "@/types/connection";
 import {
   ACCOUNT_IDENTITY_FIELDS,
   SETTINGS_STORAGE_KEY,
@@ -32,10 +43,23 @@ import { chromeLocalStorage } from "./chrome-storage";
 // v11: jira 연결 이슈 단일(relatesKey/relatesLabel)→복수(relates[{key,label}]). 직전 제출값 이관(migrateToV11).
 // v12: webhook 플랫폼 추가. 새 필드는 optional이라 이관할 데이터가 없지만, url 없는 webhook
 // 계정은 제출이 불가능한 껍데기라 migrateToV12가 걷어낸다(방어 — 정상 경로로는 안 생긴다).
-export const SETTINGS_STORE_VERSION = 12;
+// v13: GitHub/Linear connection records, selected compatibility projections, destinations, and origins.
+export const SETTINGS_STORE_VERSION = 13;
 
 interface SettingsState {
   accounts: Accounts;
+  connections: ConnectionRecords;
+  selectedConnectionIds: SelectedConnectionIds;
+  destinationProfiles: DestinationProfile[];
+  websiteOriginMappings: WebsiteOriginMapping[];
+  addConnection(platform: "github", account: GithubAccount): string;
+  addConnection(platform: "linear", account: LinearAccount, options?: AddLinearConnectionOptions): string;
+  selectConnection: (platform: RoutablePlatform, connectionId: string | undefined) => void;
+  updateConnection: <P extends RoutablePlatform>(platform: P, connectionId: string, patch: ConnectionUpdate<P>) => void;
+  removeConnection: (platform: RoutablePlatform, connectionId: string) => void;
+  getConnection(platform: "github", connectionId: string): GithubConnection | undefined;
+  getConnection(platform: "linear", connectionId: string): LinearConnection | undefined;
+  setConnectionLastSubmitFields: <P extends RoutablePlatform>(platform: P, connectionId: string, fields: P extends "github" ? import("@/types/platform").GithubLastSubmitFields : import("@/types/platform").LinearLastSubmitFields) => void;
   lastSubmitFields: LastSubmitFieldsByPlatform;
   lastSubmittedPlatform?: PlatformId;
   titlePrefix: string;
@@ -202,6 +226,46 @@ export function migrateToV12(state: V3Shape): V3Shape {
   return { ...state, accounts: rest } as V3Shape;
 }
 
+export type SettingsV13Shape = V3Shape & {
+  connections: ConnectionRecords;
+  selectedConnectionIds: SelectedConnectionIds;
+  destinationProfiles: DestinationProfile[];
+  websiteOriginMappings: WebsiteOriginMapping[];
+};
+
+export function migrateToV13(state: Partial<SettingsV13Shape> & V3Shape): SettingsV13Shape {
+  const existing = state.connections;
+  const connections: ConnectionRecords = {
+    github: existing?.github ?? (state.accounts.github ? [{
+      id: "legacy-github", platform: "github", account: state.accounts.github,
+      ...(state.lastSubmitFields?.github ? { lastSubmitFields: state.lastSubmitFields.github } : {}),
+    }] : []),
+    linear: existing?.linear ?? (state.accounts.linear ? [{
+      id: "legacy-linear", platform: "linear", account: state.accounts.linear,
+      ...(state.lastSubmitFields?.linear ? { lastSubmitFields: state.lastSubmitFields.linear } : {}),
+    }] : []),
+  };
+  const selectedConnectionIds = state.selectedConnectionIds ?? {
+    ...(state.accounts.github ? { github: connections.github[0]?.id } : {}),
+    ...(state.accounts.linear ? { linear: connections.linear[0]?.id } : {}),
+  };
+  return {
+    ...state,
+    accounts: state.accounts ?? {},
+    lastSubmitFields: state.lastSubmitFields ?? {},
+    connections,
+    selectedConnectionIds,
+    destinationProfiles: state.destinationProfiles ?? [],
+    websiteOriginMappings: state.websiteOriginMappings ?? [],
+  };
+}
+
+function newConnectionId(platform: RoutablePlatform): string {
+  const id = globalThis.crypto?.randomUUID?.();
+  if (!id) throw new Error("Secure random connection IDs are unavailable");
+  return `${platform}-${id}`;
+}
+
 export function isV3Shape(state: unknown): state is V3Shape {
   if (!state || typeof state !== "object") return false;
   return "accounts" in state;
@@ -209,10 +273,108 @@ export function isV3Shape(state: unknown): state is V3Shape {
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
-    (set) => ({
+    (set): SettingsState => ({
       accounts: {},
+      connections: { github: [], linear: [] },
+      selectedConnectionIds: {},
+      destinationProfiles: [],
+      websiteOriginMappings: [],
       lastSubmitFields: {},
       titlePrefix: "",
+      addConnection: ((platform: RoutablePlatform, account: GithubAccount | LinearAccount, options?: AddLinearConnectionOptions) => {
+        const id = newConnectionId(platform);
+        set((s) => {
+          const newlySelected = !s.selectedConnectionIds[platform];
+          const selectedConnectionIds = newlySelected ? { ...s.selectedConnectionIds, [platform]: id } : s.selectedConnectionIds;
+          if (platform === "github") {
+            const record: GithubConnection = { id, platform, account: account as GithubAccount };
+            return {
+              connections: { ...s.connections, github: [...s.connections.github, record] },
+              selectedConnectionIds,
+              accounts: newlySelected ? { ...s.accounts, github: record.account } : s.accounts,
+            };
+          }
+          const record: LinearConnection = { id, platform, account: account as LinearAccount, ...(options?.organization ? { organization: options.organization } : {}) };
+          return {
+            connections: { ...s.connections, linear: [...s.connections.linear, record] },
+            selectedConnectionIds,
+            accounts: newlySelected ? { ...s.accounts, linear: record.account } : s.accounts,
+          };
+        });
+        return id;
+      }) as SettingsState["addConnection"],
+      selectConnection: (platform, connectionId) => set((s) => {
+        if (platform === "github") {
+          const record = connectionId ? s.connections.github.find((item) => item.id === connectionId) : undefined;
+          if (connectionId && !record) return s;
+          const selectedConnectionIds = { ...s.selectedConnectionIds };
+          if (connectionId) selectedConnectionIds.github = connectionId;
+          else delete selectedConnectionIds.github;
+          const accounts = { ...s.accounts };
+          if (record) accounts.github = record.account;
+          else delete accounts.github;
+          const lastSubmitFields = { ...s.lastSubmitFields };
+          if (record?.lastSubmitFields) lastSubmitFields.github = record.lastSubmitFields;
+          else delete lastSubmitFields.github;
+          return { selectedConnectionIds, accounts, lastSubmitFields };
+        }
+        const record = connectionId ? s.connections.linear.find((item) => item.id === connectionId) : undefined;
+        if (connectionId && !record) return s;
+        const selectedConnectionIds = { ...s.selectedConnectionIds };
+        if (connectionId) selectedConnectionIds.linear = connectionId;
+        else delete selectedConnectionIds.linear;
+        const accounts = { ...s.accounts };
+        if (record) accounts.linear = record.account;
+        else delete accounts.linear;
+        const lastSubmitFields = { ...s.lastSubmitFields };
+        if (record?.lastSubmitFields) lastSubmitFields.linear = record.lastSubmitFields;
+        else delete lastSubmitFields.linear;
+        return { selectedConnectionIds, accounts, lastSubmitFields };
+      }),
+      updateConnection: (platform, connectionId, patch) => set((s) => {
+        if (platform === "github") {
+          if (!s.connections.github.some((record) => record.id === connectionId)) return s;
+          const typedPatch = patch as ConnectionUpdate<"github">;
+          const github = s.connections.github.map((record) => record.id === connectionId ? { ...record, account: { ...record.account, ...(typedPatch.defaults ? { defaults: typedPatch.defaults } : {}) }, ...(typedPatch.lastSubmitFields ? { lastSubmitFields: typedPatch.lastSubmitFields } : {}) } : record);
+          const selected = s.selectedConnectionIds.github === connectionId;
+          return { connections: { ...s.connections, github }, ...(selected ? { accounts: { ...s.accounts, github: github.find((r) => r.id === connectionId)!.account }, ...(typedPatch.lastSubmitFields ? { lastSubmitFields: { ...s.lastSubmitFields, github: typedPatch.lastSubmitFields } } : {}) } : {}) };
+        }
+        if (!s.connections.linear.some((record) => record.id === connectionId)) return s;
+        const typedPatch = patch as ConnectionUpdate<"linear">;
+        const linear = s.connections.linear.map((record) => record.id === connectionId ? { ...record, account: { ...record.account, ...(typedPatch.defaults ? { defaults: typedPatch.defaults } : {}) }, ...(typedPatch.lastSubmitFields ? { lastSubmitFields: typedPatch.lastSubmitFields } : {}) } : record);
+        const selected = s.selectedConnectionIds.linear === connectionId;
+        return { connections: { ...s.connections, linear }, ...(selected ? { accounts: { ...s.accounts, linear: linear.find((r) => r.id === connectionId)!.account }, ...(typedPatch.lastSubmitFields ? { lastSubmitFields: { ...s.lastSubmitFields, linear: typedPatch.lastSubmitFields } } : {}) } : {}) };
+      }),
+      removeConnection: (platform, connectionId) => set((s) => {
+        const connections = { ...s.connections, [platform]: s.connections[platform].filter((record) => record.id !== connectionId) };
+        if (connections[platform].length === s.connections[platform].length) return s;
+        const removedDestinationIds = new Set(s.destinationProfiles.filter((profile) => profile.platform === platform && profile.connectionId === connectionId).map((profile) => profile.id));
+        const destinationProfiles = s.destinationProfiles.filter((profile) => !removedDestinationIds.has(profile.id));
+        const websiteOriginMappings = s.websiteOriginMappings.filter((mapping) => !removedDestinationIds.has(mapping.destinationId));
+        if (s.selectedConnectionIds[platform] !== connectionId) return { connections, destinationProfiles, websiteOriginMappings };
+        const selectedConnectionIds = { ...s.selectedConnectionIds };
+        delete selectedConnectionIds[platform];
+        const accounts = { ...s.accounts };
+        delete accounts[platform];
+        const lastSubmitFields = { ...s.lastSubmitFields };
+        delete lastSubmitFields[platform];
+        return { connections, destinationProfiles, websiteOriginMappings, selectedConnectionIds, accounts, lastSubmitFields };
+      }),
+      getConnection: ((platform: RoutablePlatform, connectionId: string) => useSettingsStore.getState().connections[platform].find((record) => record.id === connectionId)) as SettingsState["getConnection"],
+      setConnectionLastSubmitFields: ((platform: RoutablePlatform, connectionId: string, fields: import("@/types/platform").GithubLastSubmitFields | import("@/types/platform").LinearLastSubmitFields) => set((s) => {
+        if (platform === "github") {
+          const typedFields = fields as import("@/types/platform").GithubLastSubmitFields;
+          if (!s.connections.github.some((record) => record.id === connectionId)) return s;
+          const connections = { ...s.connections, github: s.connections.github.map((record) => record.id === connectionId ? { ...record, lastSubmitFields: typedFields } : record) };
+          const lastSubmitFields = s.selectedConnectionIds.github === connectionId ? { ...s.lastSubmitFields, github: typedFields } : s.lastSubmitFields;
+          return { connections, lastSubmitFields };
+        }
+        const typedFields = fields as import("@/types/platform").LinearLastSubmitFields;
+        if (!s.connections.linear.some((record) => record.id === connectionId)) return s;
+        const connections = { ...s.connections, linear: s.connections.linear.map((record) => record.id === connectionId ? { ...record, lastSubmitFields: typedFields } : record) };
+        const lastSubmitFields = s.selectedConnectionIds.linear === connectionId ? { ...s.lastSubmitFields, linear: typedFields } : s.lastSubmitFields;
+        return { connections, lastSubmitFields };
+      })) as SettingsState["setConnectionLastSubmitFields"],
       // **다른** 계정이 들어오면 그 플랫폼의 직전 제출값을 버린다. 남기면 이전 계정의
       // 목적지(owner/repo·workspace 등)가 새 자격증명에 prefill되고, 그 계정이 그 목적지에
       // 접근 권한을 가지면 캡처 데이터가 이전 조직으로 나간다. 계정 신원 게이트를 가진 건
@@ -224,6 +386,40 @@ export const useSettingsStore = create<SettingsState>()(
       // 같은 술어·같은 토큰 축을 쓴다.
       setAccount: (platform, account) =>
         set((s) => {
+          if (platform === "github") {
+            const id = s.selectedConnectionIds.github ?? newConnectionId("github");
+            const prior = s.connections.github.find((record) => record.id === id);
+            const nextAccount = account as GithubAccount;
+            const prevAuth = (s.accounts.github?.auth ?? prior?.account.auth) as unknown as Record<string, unknown> | undefined;
+            const sameAccount = !!prevAuth && sameAuthIdentity(nextAccount.auth as unknown as Record<string, unknown>, prevAuth, accountIdentityExcluded("github"));
+            const oldFields = s.lastSubmitFields.github ?? prior?.lastSubmitFields;
+            const record: GithubConnection = { id, platform: "github", account: nextAccount, ...(sameAccount && oldFields ? { lastSubmitFields: oldFields } : {}) };
+            const lastSubmitFields = { ...s.lastSubmitFields };
+            if (!sameAccount) delete lastSubmitFields.github;
+            return {
+              accounts: { ...s.accounts, github: nextAccount },
+              connections: { ...s.connections, github: prior ? s.connections.github.map((item) => item.id === id ? record : item) : [...s.connections.github, record] },
+              selectedConnectionIds: { ...s.selectedConnectionIds, github: id },
+              lastSubmitFields,
+            };
+          }
+          if (platform === "linear") {
+            const id = s.selectedConnectionIds.linear ?? newConnectionId("linear");
+            const prior = s.connections.linear.find((record) => record.id === id);
+            const nextAccount = account as LinearAccount;
+            const prevAuth = (s.accounts.linear?.auth ?? prior?.account.auth) as unknown as Record<string, unknown> | undefined;
+            const sameAccount = !!prevAuth && sameAuthIdentity(nextAccount.auth as unknown as Record<string, unknown>, prevAuth, accountIdentityExcluded("linear"));
+            const oldFields = s.lastSubmitFields.linear ?? prior?.lastSubmitFields;
+            const record: LinearConnection = { id, platform: "linear", account: nextAccount, ...(prior?.organization ? { organization: prior.organization } : {}), ...(sameAccount && oldFields ? { lastSubmitFields: oldFields } : {}) };
+            const lastSubmitFields = { ...s.lastSubmitFields };
+            if (!sameAccount) delete lastSubmitFields.linear;
+            return {
+              accounts: { ...s.accounts, linear: nextAccount },
+              connections: { ...s.connections, linear: prior ? s.connections.linear.map((item) => item.id === id ? record : item) : [...s.connections.linear, record] },
+              selectedConnectionIds: { ...s.selectedConnectionIds, linear: id },
+              lastSubmitFields,
+            };
+          }
           const prevAccount = s.accounts[platform] as
             | Record<string, unknown>
             | undefined;
@@ -250,12 +446,32 @@ export const useSettingsStore = create<SettingsState>()(
         set((s) => {
           const next = { ...s.accounts };
           delete next[platform];
+          if (platform === "github" || platform === "linear") {
+            const connections = { ...s.connections, [platform]: [] };
+            const selectedConnectionIds = { ...s.selectedConnectionIds };
+            delete selectedConnectionIds[platform];
+            const nextFields = { ...s.lastSubmitFields };
+            delete nextFields[platform];
+            const removedDestinationIds = new Set(s.destinationProfiles.filter((profile) => profile.platform === platform).map((profile) => profile.id));
+            return {
+              accounts: next, connections, selectedConnectionIds, lastSubmitFields: nextFields,
+              destinationProfiles: s.destinationProfiles.filter((profile) => !removedDestinationIds.has(profile.id)),
+              websiteOriginMappings: s.websiteOriginMappings.filter((mapping) => !removedDestinationIds.has(mapping.destinationId)),
+            };
+          }
           // 연동 해제 시 해당 플랫폼의 prefill(issueType·assignee 등)도 함께 정리.
           const nextFields = { ...s.lastSubmitFields };
           delete nextFields[platform];
           return { accounts: next, lastSubmitFields: nextFields };
         }),
-      removeAllAccounts: () => set({ accounts: {}, lastSubmitFields: {} }),
+      removeAllAccounts: () => set({
+        accounts: {},
+        connections: { github: [], linear: [] },
+        selectedConnectionIds: {},
+        destinationProfiles: [],
+        websiteOriginMappings: [],
+        lastSubmitFields: {},
+      }),
       updateJiraAccount: (patch) =>
         set((s) => {
           const cur = s.accounts.jira;
@@ -266,13 +482,19 @@ export const useSettingsStore = create<SettingsState>()(
         set((s) => {
           const cur = s.accounts.github;
           if (!cur) return s;
-          return { accounts: { ...s.accounts, github: { ...cur, ...patch } } };
+          const account = { ...cur, ...patch };
+          const id = s.selectedConnectionIds.github;
+          const connections = id ? { ...s.connections, github: s.connections.github.map((item) => item.id === id ? { ...item, account } : item) } : s.connections;
+          return { accounts: { ...s.accounts, github: account }, connections };
         }),
       updateLinearAccount: (patch) =>
         set((s) => {
           const cur = s.accounts.linear;
           if (!cur) return s;
-          return { accounts: { ...s.accounts, linear: { ...cur, ...patch } } };
+          const account = { ...cur, ...patch };
+          const id = s.selectedConnectionIds.linear;
+          const connections = id ? { ...s.connections, linear: s.connections.linear.map((item) => item.id === id ? { ...item, account } : item) } : s.connections;
+          return { accounts: { ...s.accounts, linear: account }, connections };
         }),
       updateNotionAccount: (patch) =>
         set((s) => {
@@ -311,9 +533,20 @@ export const useSettingsStore = create<SettingsState>()(
           return { accounts: { ...s.accounts, webhook: { ...cur, ...patch } } };
         }),
       setLastSubmitFields: (platform, fields) =>
-        set((s) => ({
-          lastSubmitFields: { ...s.lastSubmitFields, [platform]: fields },
-        })),
+        set((s) => {
+          const lastSubmitFields = { ...s.lastSubmitFields, [platform]: fields };
+          if (platform === "github") {
+            const id = s.selectedConnectionIds.github;
+            const connections = id ? { ...s.connections, github: s.connections.github.map((record) => record.id === id ? { ...record, lastSubmitFields: fields as import("@/types/platform").GithubLastSubmitFields } : record) } : s.connections;
+            return { lastSubmitFields, connections };
+          }
+          if (platform === "linear") {
+            const id = s.selectedConnectionIds.linear;
+            const connections = id ? { ...s.connections, linear: s.connections.linear.map((record) => record.id === id ? { ...record, lastSubmitFields: fields as import("@/types/platform").LinearLastSubmitFields } : record) } : s.connections;
+            return { lastSubmitFields, connections };
+          }
+          return { lastSubmitFields };
+        }),
       setLastSubmittedPlatform: (platform) =>
         set({ lastSubmittedPlatform: platform }),
       setTitlePrefix: (prefix) => set({ titlePrefix: prefix }),
@@ -343,6 +576,9 @@ export const useSettingsStore = create<SettingsState>()(
         }
         if (version < 12) {
           state = migrateToV12(state as V3Shape) as Record<string, unknown>;
+        }
+        if (version < 13) {
+          state = migrateToV13(state as V3Shape) as unknown as Record<string, unknown>;
         }
         return state as unknown as SettingsState;
       },

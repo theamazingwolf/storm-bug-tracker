@@ -23,6 +23,11 @@ interface SettingsEnvelope {
       slack?: { auth?: SlackAuth };
       webhook?: { auth?: WebhookAuth };
     };
+    connections?: {
+      github?: { id: string; account: { auth?: GithubAuth } }[];
+      linear?: { id: string; account: { auth?: LinearAuth } }[];
+    };
+    selectedConnectionIds?: { github?: string; linear?: string };
     jiraConfig?: { auth?: JiraAuth };
   };
   version?: number;
@@ -55,10 +60,17 @@ function reader<K extends OAuthAccountKey>(
   // jira만 v1 시절 `state.jiraConfig.auth`에 저장했다. 그 envelope이 남은 설치본이 있어
   // 폴백을 지우면 조용히 로그아웃된다.
   legacy?: (envelope: SettingsEnvelope) => AuthOf<K> | undefined,
-): () => Promise<AuthOf<K> | null> {
-  return async () => {
+): (connectionId?: string) => Promise<AuthOf<K> | null> {
+  return async (connectionId?: string) => {
     const { envelope } = await readEnvelope();
     if (!envelope) return null;
+    if (account === "github" || account === "linear") {
+      const routeKey = account as "github" | "linear";
+      const id = connectionId ?? envelope.state?.selectedConnectionIds?.[routeKey];
+      const selected = id ? envelope.state?.connections?.[routeKey]?.find((record) => record.id === id) : undefined;
+      if (selected?.account.auth) return selected.account.auth as AuthOf<K>;
+      if (connectionId || envelope.state?.selectedConnectionIds?.[routeKey]) return null;
+    }
     return envelope.state?.accounts?.[account]?.auth ?? legacy?.(envelope) ?? null;
   };
 }
@@ -129,10 +141,22 @@ export function sameAuthIdentity(
 
 function writer<K extends OAuthAccountKey, A extends OAuthAuthOf<K>>(
   spec: OAuthWriteSpec<K, A>,
-): (auth: A) => Promise<void> {
-  return async (auth) => {
+): (auth: A, connectionId?: string) => Promise<void> {
+  return async (auth, connectionId) => {
     const { raw, envelope } = await readEnvelope();
-    const cur = envelope?.state?.accounts?.[spec.account]?.auth;
+    const state = envelope?.state;
+    const routeKey = spec.account === "github" || spec.account === "linear" ? spec.account as "github" | "linear" : undefined;
+    const selectedId = routeKey ? connectionId ?? state?.selectedConnectionIds?.[routeKey] : undefined;
+    const bucket = routeKey
+      ? state?.connections?.[routeKey] as Array<{ id: string; account: { auth?: unknown } }> | undefined
+      : undefined;
+    const selectedRecord = selectedId ? bucket?.find((record) => record.id === selectedId) : undefined;
+    if (selectedId && !selectedRecord) return;
+    if (selectedRecord && !selectedRecord.account.auth) return;
+    if (!connectionId && (spec.account === "github" || spec.account === "linear") && (bucket?.length ?? 0) > 1) return;
+    const cur = selectedRecord
+      ? selectedRecord.account.auth as AuthOf<K>
+      : state?.accounts?.[spec.account]?.auth;
     // 판별자 비교는 타입이 봐야 한다 — cur를 Record<string, unknown>으로 눕히면 "oauth2"
     // 같은 오타가 컴파일을 통과하고 5개 writer가 통째로 무음 no-op이 된다.
     if (!cur || cur.kind !== "oauth") return;
@@ -153,6 +177,12 @@ function writer<K extends OAuthAccountKey, A extends OAuthAuthOf<K>>(
       target[field] = spec.keepIfAbsent?.includes(field)
         ? auth[field] ?? target[field]
         : auth[field];
+    }
+    if (selectedRecord) {
+      selectedRecord.account.auth = target;
+      if (routeKey && state?.selectedConnectionIds?.[routeKey] === selectedRecord.id && state.accounts) {
+        (state.accounts[routeKey] as { auth?: unknown } | undefined)!.auth = target;
+      }
     }
     const next = typeof raw === "string" ? JSON.stringify(envelope) : envelope;
     await chrome.storage.local.set({ [SETTINGS_STORAGE_KEY]: next });
