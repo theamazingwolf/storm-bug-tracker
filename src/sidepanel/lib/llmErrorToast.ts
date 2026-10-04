@@ -1,4 +1,5 @@
 import { toast } from "sonner";
+import { NativeChatGptError } from "./nativeChatGptProtocol";
 import type { TranslationFn } from "@/i18n";
 import type { TranslationKey } from "@/i18n/ko";
 import {
@@ -51,6 +52,24 @@ export function toastLlmError(
     toast.error(t("llm.error.request"));
   } else if (err instanceof LlmResponseTooLargeError) {
     toast.error(t("llm.error.responseTooLarge"));
+  } else if (err instanceof NativeChatGptError) {
+    const code = err.code.toLowerCase();
+    const key = /usage_limit|quota|rate_limit/.test(code)
+      ? "llm.error.nativeQuota"
+      : /busy|timeout/.test(code)
+        ? "llm.error.nativeBusy"
+        : /context_too_large|request_too_large/.test(code)
+          ? "llm.error.nativeContextOverflow"
+          : /auth|sign_in|profile.*not_signed_in/.test(code)
+            ? "llm.error.nativeAuth"
+            : /plan_scope|scope|permission/.test(code)
+              ? "llm.error.nativePlan"
+              : /model/.test(code)
+                ? "llm.error.nativeModel"
+                : /unsupported.*image|image.*unsupported/.test(code)
+                  ? "llm.error.nativeUnsupported"
+                  : "llm.error.nativeHelper";
+    toast.error(t(key));
   } else {
     toast.error(t(fallbackKey));
   }

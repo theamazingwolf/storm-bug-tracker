@@ -20,6 +20,8 @@ import { useSettingsStore } from "@/store/settings-store";
 import {
   buildAiDraftSchema,
   buildAiDraftSessionPrompt,
+  buildSeparatedDraftInstructions,
+  serializeSeparatedDraftContext,
   getDraftFewShot,
   parseAiDraftResponse,
   type AiDraftSessionContext,
@@ -234,9 +236,16 @@ export function AiDraftDialog({
       // sessionRef는 run보다 오래 살아서, 가드 없이 여기 오면 새 run의 세션을 파괴한다.
       if (!aiRun.isActive(run)) return;
       sessionRef.current?.destroy?.();
+      const separatedContext = capabilities.requiresSeparatedContext
+        ? serializeSeparatedDraftContext(fitted.ctx)
+        : undefined;
+      const sessionInstructions = capabilities.requiresSeparatedContext
+        ? buildSeparatedDraftInstructions(fitted.ctx)
+        : systemPrompt;
       const createdSession = await createSessionRef.current(
-        systemPrompt,
+        sessionInstructions,
         fewShot,
+        { untrustedContext: separatedContext },
       );
       if (!aiRun.isActive(run)) {
         createdSession.destroy?.();
@@ -259,6 +268,7 @@ export function AiDraftDialog({
           responseSchema,
           images,
           signal: run.signal,
+          userContext: separatedContext,
         })
         .catch(mapQuotaError);
       if (!aiRun.isActive(run)) return; // 중단·교체 — 결과 폐기(로딩은 canceller가 이미 내렸다).

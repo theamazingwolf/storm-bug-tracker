@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSettingsUiStore } from "@/store/settings-ui-store";
+import { useNativeChatGptUiStore } from "@/store/native-chatgpt-ui-store";
 import {
   CHROME_AI_LANG_OPTIONS,
   createAnthropicProvider,
@@ -10,10 +11,22 @@ import {
   type AIProvider,
   type ProviderCapabilities,
 } from "@/sidepanel/lib/ai-provider";
+import { NativeChatGptError } from "@/sidepanel/lib/nativeChatGptProtocol";
+import {
+  createNativeChatGptProvider,
+  NATIVE_CHATGPT_CAPABILITIES,
+} from "@/sidepanel/lib/nativeChatGptProvider";
 
 type AIStatus = "checking" | "available" | "unavailable";
+type AIPurpose = "draft" | "styling";
 
-export function useAI(): {
+const unavailableSubscriptionProvider: AIProvider = {
+  capabilities: NATIVE_CHATGPT_CAPABILITIES,
+  generate: async () => { throw new NativeChatGptError("selection_required"); },
+  createSession: async () => { throw new NativeChatGptError("selection_required"); },
+};
+
+export function useAI(purpose: AIPurpose = "draft"): {
   status: AIStatus;
   providerLabel: string | null;
   capabilities: ProviderCapabilities;
@@ -21,10 +34,28 @@ export function useAI(): {
   createSession: AIProvider["createSession"];
 } {
   const llm = useSettingsUiStore((s) => s.llm);
+  const providerPreference = useSettingsUiStore((s) => s.aiProviderPreference);
+  const profileId = useSettingsUiStore((s) => s.subscriptionProfileId);
+  const modelId = useSettingsUiStore((s) => s.subscriptionModelId);
+  const transportConnected = useNativeChatGptUiStore((s) => s.transportConnected);
+  const helperStatus = useNativeChatGptUiStore((s) => s.status);
+  const profiles = useNativeChatGptUiStore((s) => s.profiles);
+  const models = useNativeChatGptUiStore((s) => s.models);
+  const modelsProfileId = useNativeChatGptUiStore((s) => s.modelsProfileId);
   const [chromeAIStatus, setChromeAIStatus] = useState<AIStatus>("checking");
 
+  const subscriptionReady = Boolean(
+    transportConnected &&
+    helperStatus?.connected &&
+    profileId &&
+    profiles.some((profile) => profile.id === profileId && profile.signedIn && profile.planEnabled) &&
+    modelsProfileId === profileId &&
+    modelId &&
+    models.some((model) => model.slug === modelId),
+  );
+
   useEffect(() => {
-    if (llm?.modelId) return;
+    if (providerPreference === "chatgpt-subscription" || llm?.modelId) return;
     let cancelled = false;
     (async () => {
       try {
@@ -49,9 +80,15 @@ export function useAI(): {
     return () => {
       cancelled = true;
     };
-  }, [llm?.modelId]);
+  }, [llm?.modelId, providerPreference]);
 
   const provider = useMemo<AIProvider>(() => {
+    if (providerPreference === "chatgpt-subscription") {
+      if (purpose !== "draft" || !subscriptionReady || !profileId || !modelId) {
+        return unavailableSubscriptionProvider;
+      }
+      return createNativeChatGptProvider({ profileId, modelId });
+    }
     if (llm?.modelId) {
       const kind = detectProviderKind(llm.baseUrl);
       return kind === "anthropic"
@@ -59,14 +96,21 @@ export function useAI(): {
         : createOpenAICompatibleProvider(llm);
     }
     return createChromeAIProvider();
-  }, [llm]);
+  }, [llm, modelId, profileId, providerPreference, purpose, subscriptionReady]);
 
-  const status: AIStatus = llm?.modelId ? "available" : chromeAIStatus;
-  const providerLabel = llm?.modelId ? getProviderLabel(llm.baseUrl) : null;
+  if (providerPreference === "chatgpt-subscription") {
+    return {
+      status: purpose === "draft" && subscriptionReady ? "available" : "unavailable",
+      providerLabel: "ChatGPT subscription",
+      capabilities: provider.capabilities,
+      generate: provider.generate,
+      createSession: provider.createSession,
+    };
+  }
 
   return {
-    status,
-    providerLabel,
+    status: llm?.modelId ? "available" : chromeAIStatus,
+    providerLabel: llm?.modelId ? getProviderLabel(llm.baseUrl) : null,
     capabilities: provider.capabilities,
     generate: provider.generate,
     createSession: provider.createSession,

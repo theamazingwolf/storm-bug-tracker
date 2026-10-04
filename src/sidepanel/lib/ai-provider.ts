@@ -62,6 +62,10 @@ export interface ProviderCapabilities {
   readonly promptStyle: PromptStyle;
   readonly supportsImages: boolean;
   readonly contextBudgetChars: number;
+  /** This provider requires captured data to travel in the user-input channel. */
+  readonly requiresSeparatedContext?: boolean;
+  /** Never invoke this provider from automatic/background features. */
+  readonly requiresExplicitAction?: boolean;
 }
 
 export interface ImageCapabilityConfirmation {
@@ -136,6 +140,8 @@ export interface AISession {
       responseSchema?: Record<string, unknown>;
       images?: string[];
       signal?: AbortSignal;
+      /** Untrusted capture/user data, kept separate from provider instructions. */
+      userContext?: string;
     },
   ): Promise<string>;
   destroy(): void;
@@ -161,6 +167,7 @@ export interface AIProvider {
   createSession(
     systemPrompt: string,
     fewShot?: FewShotExample[],
+    options?: { untrustedContext?: string },
   ): Promise<AISession>;
 }
 

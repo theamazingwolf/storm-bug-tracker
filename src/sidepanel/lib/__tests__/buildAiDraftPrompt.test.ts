@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   buildAiDraftSchema,
   buildAiDraftSessionPrompt,
+  buildSeparatedDraftInstructions,
+  serializeSeparatedDraftContext,
   getDraftFewShot,
   parseAiDraftResponse,
   type AiDraftSessionContext,
@@ -132,6 +134,32 @@ const SESSION_BASE: AiDraftSessionContext = {
     { id: "expectedResult" },
   ],
 };
+
+describe("separated ChatGPT draft context", () => {
+  it("keeps captured page/user/draft data out of system instructions", () => {
+    const ctx: AiDraftSessionContext = {
+      ...SESSION_BASE,
+      caps: { ...NANO_CAPABILITIES, requiresSeparatedContext: true },
+      captureMode: "element",
+      url: "https://example.com/UNTRUSTED_PATH",
+      pageTitle: "UNTRUSTED_PAGE_TITLE",
+      userPrompt: "UNTRUSTED_USER_PROMPT",
+      selector: "UNTRUSTED_SELECTOR",
+      tagName: "button",
+      diffs: [{ prop: "color", asIs: "UNTRUSTED_OLD", toBe: "UNTRUSTED_NEW" }],
+      existingDraft: { title: "UNTRUSTED_DRAFT_TITLE", sections: { description: "UNTRUSTED_DRAFT_BODY" } },
+    };
+    const instructions = buildSeparatedDraftInstructions(ctx);
+    const text = serializeSeparatedDraftContext(ctx);
+    for (const marker of ["UNTRUSTED_PATH", "UNTRUSTED_PAGE_TITLE", "UNTRUSTED_DRAFT_BODY", "UNTRUSTED_OLD"]) {
+      expect(instructions).not.toContain(marker);
+      expect(text).toContain(marker);
+    }
+    expect(instructions).not.toContain("UNTRUSTED_USER_PROMPT");
+    expect(text).not.toContain("UNTRUSTED_USER_PROMPT"); // the separate prompt() input owns it.
+    expect(instructions).toContain("Sections:");
+  });
+});
 
 describe("buildAiDraftSessionPrompt", () => {
   it("screenshot 모드: URL, 페이지 제목, 이미지 참조 지시 포함", () => {

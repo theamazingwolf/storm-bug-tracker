@@ -96,6 +96,16 @@ describe("useReproPrefill", () => {
     expect(generateReproStepsWithAI).not.toHaveBeenCalled();
   });
 
+  it("명시적 사용자 동작이 필요한 구독 제공자는 자동 프리필하지 않는다", async () => {
+    const { args } = render({
+      capabilities: { ...NANO_CAPABILITIES, requiresExplicitAction: true },
+    });
+    await flush();
+    expect(args.setDraft).not.toHaveBeenCalled();
+    expect(args.setReproPrefillDone).not.toHaveBeenCalled();
+    expect(generateReproStepsWithAI).not.toHaveBeenCalled();
+  });
+
   it("available이면 AI 결과로 채운다", async () => {
     vi.mocked(generateReproStepsWithAI).mockResolvedValue("AI a\nAI b");
     const { args } = render({ aiStatus: "available" });

@@ -99,11 +99,20 @@ describe("manifest _locales — Chrome 길이 예산", () => {
   });
 
   // 제품명은 번역 대상이 아니다 — 액션 버튼 라벨이 로케일마다 갈리면 브랜드가 쪼개진다.
-  it("EXT_NAME_SHORT는 모든 로케일에서 BugShot이다 (제품명 핀)", () => {
+  it("EXT_NAME_SHORT는 모든 로케일에서 BugShot이다 (액션 라벨 핀)", () => {
     const wrong = Object.entries(registry)
       .filter(([, dict]) => dict.EXT_NAME_SHORT !== "BugShot")
       .map(([locale]) => locale);
     expect(wrong).toEqual([]);
+  });
+
+  it("EXT_NAME identifies the fork and the manifest has no upstream identity key", () => {
+    const wrong = Object.entries(registry)
+      .filter(([, dict]) => dict.EXT_NAME !== "Storm Bug Tracker")
+      .map(([locale]) => locale);
+    expect(wrong).toEqual([]);
+    expect(manifestSource).not.toContain("DEV_KEY");
+    expect(manifestSource).toContain('"nativeMessaging"');
   });
 });
 

@@ -11,13 +11,15 @@ import type {
 } from "./ai-provider";
 import type { AiLanguage } from "./aiLanguage";
 import { extractJson } from "./extractJson";
-import { MAX_TITLE_LENGTH } from "./prompts/caps";
+import { MAX_TITLE_LENGTH, PROMPT_CAPS } from "./prompts/caps";
+import { selectDraftSections } from "./prompts/context";
 import {
   buildCompactDraftPrompt,
   COMPACT_DRAFT_FEW_SHOT,
   COMPACT_DRAFT_FEW_SHOT_LOGREFS,
 } from "./prompts/draftCompact";
 import { buildRichDraftPrompt } from "./prompts/draftRich";
+import { resolveAiDraftStyleElements } from "./prompts/draftStyleElements";
 import {
   canRequestLogRefs,
   selectLogCandidates,
@@ -180,4 +182,61 @@ export function getDraftFewShot(
   return canRequestLogRefs(ctx, selectLogCandidates(ctx))
     ? entry.logRefs
     : entry.base;
+}
+
+/**
+ * Remove captured/page-controlled values from the trusted instruction channel.
+ * The helper's instructions field is a system instruction, so only app-generated
+ * structure and preference values may remain in it.
+ */
+export function buildSeparatedDraftInstructions(
+  ctx: AiDraftSessionContext,
+): string {
+  return buildAiDraftSessionPrompt({
+    ...ctx,
+    url: "",
+    pageTitle: "",
+    selector: undefined,
+    tagName: undefined,
+    diffs: undefined,
+    styleElements: undefined,
+    tokens: undefined,
+    userPrompt: undefined,
+    networkLogSummary: undefined,
+    consoleLogSummary: undefined,
+    actionLogSummary: undefined,
+    requests: undefined,
+    existingDraft: undefined,
+  });
+}
+
+/** Serialize captured values for the untrusted user-input channel only. */
+export function serializeSeparatedDraftContext(
+  ctx: AiDraftSessionContext,
+): string {
+  const candidates = selectLogCandidates(ctx);
+  const caps = PROMPT_CAPS.rich;
+  const elements = resolveAiDraftStyleElements(ctx).slice(0, caps.styles).map((element) => ({
+    selector: element.selector,
+    tagName: element.tagName,
+    frameId: element.frameId,
+    diffs: element.diffs,
+  }));
+  const priorDraft = selectDraftSections(
+    ctx.existingDraft,
+    ctx.enabledSections.map((section) => section.id),
+    caps.existingDraftChars,
+  );
+  return JSON.stringify({
+    captureMode: ctx.captureMode,
+    page: { url: ctx.url, title: ctx.pageTitle },
+    element: elements,
+    designTokens: ctx.tokens?.slice(0, caps.designTokens),
+    consoleSummary: ctx.consoleLogSummary,
+    actionSummary: ctx.actionLogSummary?.slice(0, caps.actions),
+    networkCandidates: candidates.network,
+    consoleCandidates: candidates.console,
+    matchedRequests: candidates.matched,
+    existingDraft: priorDraft.parts.join("\n"),
+  });
 }

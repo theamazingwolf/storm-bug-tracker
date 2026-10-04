@@ -85,6 +85,7 @@ export function useReproPrefill(args: UseReproPrefillArgs): {
   const stepsEmpty = !draft?.sections.stepsToReproduce?.trim();
 
   useEffect(() => {
+    if (capabilities.requiresExplicitAction) return;
     if (!autoEnabledRef.current) return;
     // video 게이트는 1차 릴리스 스코프 제한, 아래 supportsActionLog는 로그 정책 단일 출처다 — video가 늘 후자를 통과해 겹쳐 보여도 스코프가 넓어질 때를 위해 남긴다(POSTMORTEM 2026-07-14).
     if (captureMode !== "video") return;

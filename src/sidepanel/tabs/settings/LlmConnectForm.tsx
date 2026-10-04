@@ -63,12 +63,51 @@ import {
 import { PageScroll, PageShell, Section } from "@/sidepanel/components/Section";
 import { LlmConnectDialog } from "./LlmConnectDialog";
 import { SettingsFooter } from "./SettingsFooter";
+import { NativeSubscriptionSettings } from "./NativeSubscriptionSettings";
 
 export function LlmConnectForm() {
   const llm = useSettingsUiStore((s) => s.llm);
+  const preference = useSettingsUiStore((s) => s.aiProviderPreference);
 
+  if (preference === "chatgpt-subscription") return <LlmSubscriptionMode />;
   if (!llm) return <LlmOnboarding />;
   return <LlmConnected />;
+}
+
+function ProviderPreferenceSection() {
+  const t = useT();
+  const preference = useSettingsUiStore((s) => s.aiProviderPreference);
+  const setPreference = useSettingsUiStore((s) => s.setAiProviderPreference);
+  return (
+    <Section title={t("llm.section.provider")}>
+      <Select
+        value={preference}
+        onValueChange={(value) => setPreference(value as "default" | "chatgpt-subscription")}
+      >
+        <SelectTrigger className="w-full" aria-label={t("llm.section.provider")}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="default">{t("llm.provider.default")}</SelectItem>
+          <SelectItem value="chatgpt-subscription">{t("llm.provider.subscription")}</SelectItem>
+        </SelectContent>
+      </Select>
+      <p className="text-sm text-muted-foreground">{t("llm.provider.help")}</p>
+    </Section>
+  );
+}
+
+function LlmSubscriptionMode() {
+  return (
+    <PageShell>
+      <PageScroll>
+        <ProviderPreferenceSection />
+        <NativeSubscriptionSettings />
+        <AiLanguageSection />
+      </PageScroll>
+      <SettingsFooter />
+    </PageShell>
+  );
 }
 
 function LlmOnboarding() {
@@ -77,6 +116,7 @@ function LlmOnboarding() {
 
   return (
     <>
+      <ProviderPreferenceSection />
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-4 pb-5 text-center">
         <div className="mb-3 rounded-full bg-muted p-3">
           <Bot className="h-6 w-6 text-muted-foreground" />
@@ -196,6 +236,7 @@ function LlmConnected() {
   return (
     <PageShell>
       <PageScroll>
+        <ProviderPreferenceSection />
         <Section
           title={t("llm.section.connection")}
           action={

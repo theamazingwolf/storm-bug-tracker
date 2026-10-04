@@ -355,6 +355,30 @@ describe("settings-ui-store", () => {
       expect(migrated.llm?.imageCapability).toBeUndefined();
     });
 
+    it("구독 프로필/모델 ID만 저장하고 프로필 변경 시 모델을 무효화한다", () => {
+      const state = useSettingsUiStore.getState();
+      state.setAiProviderPreference("chatgpt-subscription");
+      state.setSubscriptionProfileId("profile-safe-id");
+      state.setSubscriptionModelId("model-safe-id");
+      expect(useSettingsUiStore.getState().subscriptionModelId).toBe("model-safe-id");
+      useSettingsUiStore.getState().setSubscriptionProfileId("another-profile");
+      expect(useSettingsUiStore.getState().subscriptionProfileId).toBe("another-profile");
+      expect(useSettingsUiStore.getState().subscriptionModelId).toBe("");
+      useSettingsUiStore.getState().setAiProviderPreference("default");
+    });
+
+    it("구독 설정 마이그레이션은 허용값만 남기고 비밀 필드를 추가하지 않는다", () => {
+      const migrated = migrateSettingsUi({
+        aiProviderPreference: "surprise",
+        subscriptionProfileId: "x".repeat(129),
+        subscriptionModelId: 42,
+      }, 11);
+      expect(migrated.aiProviderPreference).toBe("default");
+      expect(migrated.subscriptionProfileId).toBeNull();
+      expect(migrated.subscriptionModelId).toBe("");
+      expect("apiKey" in migrated).toBe(false);
+    });
+
     it("setLlm(null)로 LLM 설정 초기화", () => {
       useSettingsUiStore.getState().setLlm({
         baseUrl: "https://api.openai.com/v1",
@@ -439,8 +463,8 @@ describe("settings-ui-store", () => {
   // 이슈 본문 언어(bodyLocale)는 화면 언어와 독립된 세 번째 축이다. 기본값 auto는
   // 화면 언어를 따라가므로 기존 사용자의 출력이 한 바이트도 바뀌지 않아야 한다.
   describe("bodyLocale 마이그레이션 (v10→v11)", () => {
-    it("persist version이 11이다", () => {
-      expect(useSettingsUiStore.persist.getOptions().version).toBe(11);
+    it("persist version이 12이다", () => {
+      expect(useSettingsUiStore.persist.getOptions().version).toBe(12);
     });
 
     it("bodyLocale 부재 시 기본값 'auto' 부여 (기존 사용자 동작 변화 0)", () => {

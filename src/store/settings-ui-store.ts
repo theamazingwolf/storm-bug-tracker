@@ -20,6 +20,12 @@ export type ThemeMode = "light" | "dark" | "system";
 // 기존 import 경로를 쓰는 소비처를 안 깨뜨리려는 것 — 방향은 store → i18n 단방향이다.
 export type { LocaleMode };
 export type StyleEditorView = "form" | "code";
+export type AiProviderPreference = "default" | "chatgpt-subscription";
+
+const normalizeProfileId = (value: unknown): string | null =>
+  typeof value === "string" && value.length > 0 && value.length <= 128 ? value : null;
+const normalizeModelId = (value: unknown): string =>
+  typeof value === "string" && value.length > 0 && value.length <= 128 ? value : "";
 
 export type IssueSectionId =
   | "description"
@@ -136,6 +142,9 @@ interface SettingsUiState {
   bodyLocale: BodyLocale;
   issueSections: IssueSection[];
   llm: LlmConfig | null;
+  aiProviderPreference: AiProviderPreference;
+  subscriptionProfileId: string | null;
+  subscriptionModelId: string;
   replayEnabled: boolean;
   attachmentsEnabled: boolean;
   autoReproPrefill: boolean;
@@ -150,6 +159,9 @@ interface SettingsUiState {
   resetIssueSectionOrder: () => void;
   resetIssueSections: () => void;
   setLlm: (config: LlmConfig | null) => void;
+  setAiProviderPreference: (preference: AiProviderPreference) => void;
+  setSubscriptionProfileId: (profileId: string | null) => void;
+  setSubscriptionModelId: (modelId: string) => void;
   setReplayEnabled: (enabled: boolean) => void;
   setAttachmentsEnabled: (enabled: boolean) => void;
   setAutoReproPrefill: (enabled: boolean) => void;
@@ -171,6 +183,11 @@ export function migrateSettingsUi(
   if (version < 5 && state.llm && !state.llm.apiKey) {
     state.llm = null;
   }
+  state.aiProviderPreference = state.aiProviderPreference === "chatgpt-subscription"
+    ? "chatgpt-subscription"
+    : "default";
+  state.subscriptionProfileId = normalizeProfileId(state.subscriptionProfileId);
+  state.subscriptionModelId = normalizeModelId(state.subscriptionModelId);
   state.recordingMode = state.recordingMode ?? "tab";
   state.styleEditorView = state.styleEditorView ?? "form";
   state.autoReproPrefill = state.autoReproPrefill ?? true;
@@ -199,6 +216,14 @@ export function mergePersistedSettings(
     ...current,
     ...p,
     llm: normalizeLlmImageCapability(p.llm === undefined ? current.llm : p.llm) ?? null,
+    aiProviderPreference:
+      p.aiProviderPreference === "chatgpt-subscription" ? "chatgpt-subscription" : "default",
+    subscriptionProfileId: normalizeProfileId(
+      p.subscriptionProfileId === undefined ? current.subscriptionProfileId : p.subscriptionProfileId,
+    ),
+    subscriptionModelId: normalizeModelId(
+      p.subscriptionModelId === undefined ? current.subscriptionModelId : p.subscriptionModelId,
+    ),
     // 저장된 값이 없으면 detectLocale이 정한 현재 값을 유지한다(없는 걸 덮어쓰지 않는다).
     locale: p.locale === undefined ? current.locale : normalizeLocale(p.locale),
     issueSections: normalizeSections(p.issueSections ?? current.issueSections),
@@ -246,6 +271,9 @@ export const useSettingsUiStore = create<SettingsUiState>()(
       bodyLocale: "auto",
       issueSections: DEFAULT_ISSUE_SECTIONS,
       llm: null,
+      aiProviderPreference: "default",
+      subscriptionProfileId: null,
+      subscriptionModelId: "",
       replayEnabled: false,
       attachmentsEnabled: false,
       autoReproPrefill: true,
@@ -290,6 +318,12 @@ export const useSettingsUiStore = create<SettingsUiState>()(
         }),
       resetIssueSections: () => set({ issueSections: DEFAULT_ISSUE_SECTIONS }),
       setLlm: (config) => set({ llm: config }),
+      setAiProviderPreference: (aiProviderPreference) => set({ aiProviderPreference }),
+      setSubscriptionProfileId: (profileId) => set({
+        subscriptionProfileId: normalizeProfileId(profileId),
+        subscriptionModelId: "",
+      }),
+      setSubscriptionModelId: (modelId) => set({ subscriptionModelId: normalizeModelId(modelId) }),
       setReplayEnabled: (enabled) => set({ replayEnabled: enabled }),
       setAttachmentsEnabled: (enabled) => set({ attachmentsEnabled: enabled }),
       setAutoReproPrefill: (enabled) => set({ autoReproPrefill: enabled }),
@@ -299,8 +333,8 @@ export const useSettingsUiStore = create<SettingsUiState>()(
     {
       // 기존 사용자 데이터 호환을 위해 리네이밍 전 키 유지
       name: APP_SETTINGS_PERSIST_KEY,
-      // v3: llm 필드 추가, v4: apiKey를 session→local 이전(apiKeyObfuscatingStorage가 흡수, migrate 분기 없음), v5: apiKey 없는 stale 설정 제거, v6: recordingMode 추가, v7: styleEditorView 추가, v8: autoReproPrefill 추가, v9: issueSections에 media 엔트리 편입, v10: aiLanguage 추가, v11: bodyLocale 추가
-      version: 11,
+      // v3-v11: prior settings; v12: local provider preference and non-secret profile/model IDs.
+      version: 12,
       storage: createJSONStorage(() => apiKeyObfuscatingStorage),
       migrate: migrateSettingsUi,
       merge: mergePersistedSettings,

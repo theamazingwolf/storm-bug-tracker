@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { toast } from "sonner";
 import { toastLlmError } from "../llmErrorToast";
+import { NativeChatGptError } from "../nativeChatGptProtocol";
 import {
   AiContextOverflowError,
   LlmAuthError,
@@ -71,6 +72,21 @@ describe("toastLlmError", () => {
     [new LlmResponseTooLargeError(), "llm.error.responseTooLarge"],
   ])("실패 유형에 맞는 안전한 안내: %s", (error, key) => {
     toastLlmError(error, t, "draft.aiError");
+    expect(toast.error).toHaveBeenCalledWith(key);
+  });
+
+  it.each([
+    ["usage_limit", "llm.error.nativeQuota"],
+    ["busy", "llm.error.nativeBusy"],
+    ["provider_timeout", "llm.error.nativeBusy"],
+    ["request_too_large", "llm.error.nativeContextOverflow"],
+    ["sign_in_required", "llm.error.nativeAuth"],
+    ["plan_scope_required", "llm.error.nativePlan"],
+    ["model_not_visible", "llm.error.nativeModel"],
+    ["unsupported_images", "llm.error.nativeUnsupported"],
+    ["unknown_future_code", "llm.error.nativeHelper"],
+  ])("native helper code %s maps to a safe localized class", (code, key) => {
+    toastLlmError(new NativeChatGptError(code), t, "draft.aiError");
     expect(toast.error).toHaveBeenCalledWith(key);
   });
 
