@@ -24,33 +24,40 @@ interface Props {
   value: string | undefined;
   valueName?: string;
   onChange: (projectId: string | undefined, projectName: string | undefined) => void;
+  connectionId?: string;
 }
 
-export function ProjectCombobox({ teamId, value, valueName, onChange }: Props) {
+export function ProjectCombobox({ teamId, value, valueName, onChange, connectionId }: Props) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<LinearProject[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadedTeamId, setLoadedTeamId] = useState<string | null>(null);
+  const [loadedConnectionId, setLoadedConnectionId] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     if (!open || !teamId) return;
-    if (loadedTeamId === teamId && items.length > 0) return;
+    if (loadedTeamId === teamId && loadedConnectionId === connectionId && items.length > 0) return;
+    let active = true;
     setLoading(true);
     setError(null);
-    sendBg<LinearProject[]>({ type: "linear.getProjects", teamId })
+    sendBg<LinearProject[]>({ type: "linear.getProjects", teamId, ...(connectionId ? { connectionId } : {}) })
       .then((list) => {
+        if (!active) return;
         setItems(list);
         setLoadedTeamId(teamId);
+        setLoadedConnectionId(connectionId);
       })
-      .catch((err: unknown) =>
-        setError(err instanceof Error ? err.message : String(err)),
-      )
-      .finally(() => setLoading(false));
-  }, [open, teamId]);
+      .catch((err: unknown) => {
+        if (active) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [open, teamId, connectionId, loadedTeamId, loadedConnectionId, items.length]);
 
-  const selected = items.find((p) => p.id === value);
+  const visibleItems = loadedTeamId === teamId && loadedConnectionId === connectionId ? items : [];
+  const selected = visibleItems.find((p) => p.id === value);
   const label = selected?.name ?? (value ? valueName : undefined) ?? t("linear.field.project.select");
   const disabled = !teamId;
 
@@ -88,7 +95,7 @@ export function ProjectCombobox({ teamId, value, valueName, onChange }: Props) {
               <>
                 <CommandEmpty>{t("linear.field.project.empty")}</CommandEmpty>
                 <CommandGroup>
-                  {items.map((p) => {
+                  {visibleItems.map((p) => {
                     const sel = value === p.id;
                     return (
                       <CommandItem

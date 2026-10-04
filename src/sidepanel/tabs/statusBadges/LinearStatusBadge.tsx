@@ -12,11 +12,13 @@ import { LINEAR_STATE_TYPE_COLORS, STATUS_CATEGORY_COLORS, LINEAR_STATE_I18N } f
 export function LinearStatusBadge({
   issueId,
   issueIdentifier,
+  connectionId,
   currentState,
   onStatusChanged,
 }: {
   issueId: string;
   issueIdentifier: string;
+  connectionId?: string;
   currentState: { name: string; type: string };
   onStatusChanged: (s: LinearIssueStatus) => void;
 }) {
@@ -37,7 +39,7 @@ export function LinearStatusBadge({
     setOpen(v);
     if (v && !states) {
       setLoading(true);
-      sendBg<LinearWorkflowState[]>({ type: "linear.getWorkflowStates", issueIdentifier })
+      sendBg<LinearWorkflowState[]>({ type: "linear.getWorkflowStates", issueIdentifier, ...(connectionId ? { connectionId } : {}) })
         .then(setStates)
         .catch(() => setStates([]))
         .finally(() => setLoading(false));
@@ -53,6 +55,7 @@ export function LinearStatusBadge({
       type: "linear.updateIssueState",
       issueId,
       stateId: state.id,
+      ...(connectionId ? { connectionId } : {}),
     })
       .then((res) => {
         onStatusChanged(res);

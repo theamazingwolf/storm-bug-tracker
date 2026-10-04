@@ -3417,3 +3417,45 @@ describe("pending 영상 미러링 실패 알림", () => {
     expect(onBlobSaveFailed.fire).not.toHaveBeenCalled();
   });
 });
+
+describe("destination binding persistence", () => {
+  const binding = {
+    id: "repo-profile",
+    platform: "github" as const,
+    connectionId: "gh-a",
+    owner: "org",
+    repo: "tracker",
+  };
+
+  beforeEach(() => {
+    useEditorStore.setState(useEditorStore.getInitialState(), true);
+    mockSaveDraft.mockClear();
+  });
+
+  it("persists the selected destination in the editor snapshot", () => {
+    useEditorStore.getState().setDestinationBinding(binding);
+    expect(EDITOR_SNAPSHOT_KEYS).toContain("destinationBinding");
+    expect(useEditorStore.getState().destinationBinding).toEqual(binding);
+  });
+
+  it("copies the binding into the saved issue record", () => {
+    useEditorStore.setState({
+      captureMode: "screenshot",
+      phase: "drafting",
+      target,
+      targetPlatform: "github",
+      destinationBinding: binding,
+      screenshotRaw: "data:image/png;base64,abc",
+      draft: { title: "Bug", sections: {} },
+    });
+    useEditorStore.getState().confirmDraft();
+    expect(mockSaveDraft.mock.calls[0][0].destinationBinding).toEqual(binding);
+    expect(mockSaveDraft.mock.calls[0][0].destinationBinding).not.toBe(binding);
+  });
+
+  it("clears the binding only when the user explicitly changes platform", () => {
+    useEditorStore.setState({ targetPlatform: "github", destinationBinding: binding });
+    useEditorStore.getState().setTargetPlatform("linear");
+    expect(useEditorStore.getState().destinationBinding).toBeNull();
+  });
+});

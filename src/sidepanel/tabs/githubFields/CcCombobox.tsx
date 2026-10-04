@@ -13,9 +13,10 @@ interface Props {
   repo: string | undefined;
   value: string[];
   onChange: (next: string[]) => void;
+  connectionId?: string;
 }
 
-export function CcCombobox({ owner, repo, value, onChange }: Props) {
+export function CcCombobox({ owner, repo, value, onChange, connectionId }: Props) {
   const t = useT();
   const [open, setOpen] = useState(false);
 
@@ -27,8 +28,9 @@ export function CcCombobox({ owner, repo, value, onChange }: Props) {
         type: "github.searchAssignees",
         owner: owner!,
         repo: repo!,
+        ...(connectionId ? { connectionId } : {}),
       }),
-    [owner, repo],
+    [owner, repo, connectionId],
   );
   const { items, loading, error } = useLazyListOnOpen(open, ready, load);
 

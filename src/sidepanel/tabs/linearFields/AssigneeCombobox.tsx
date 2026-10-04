@@ -25,33 +25,40 @@ interface Props {
   value: string | undefined;
   valueName?: string;
   onChange: (assigneeId: string | undefined, assigneeName: string | undefined) => void;
+  connectionId?: string;
 }
 
-export function AssigneeCombobox({ teamId, value, valueName, onChange }: Props) {
+export function AssigneeCombobox({ teamId, value, valueName, onChange, connectionId }: Props) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<LinearUser[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadedTeamId, setLoadedTeamId] = useState<string | null>(null);
+  const [loadedConnectionId, setLoadedConnectionId] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     if (!open || !teamId) return;
-    if (loadedTeamId === teamId && items.length > 0) return;
+    if (loadedTeamId === teamId && loadedConnectionId === connectionId && items.length > 0) return;
+    let active = true;
     setLoading(true);
     setError(null);
-    sendBg<LinearUser[]>({ type: "linear.getMembers", teamId })
+    sendBg<LinearUser[]>({ type: "linear.getMembers", teamId, ...(connectionId ? { connectionId } : {}) })
       .then((list) => {
+        if (!active) return;
         setItems(list);
         setLoadedTeamId(teamId);
+        setLoadedConnectionId(connectionId);
       })
-      .catch((err: unknown) =>
-        setError(err instanceof Error ? err.message : String(err)),
-      )
-      .finally(() => setLoading(false));
-  }, [open, teamId]);
+      .catch((err: unknown) => {
+        if (active) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [open, teamId, connectionId, loadedTeamId, loadedConnectionId, items.length]);
 
-  const selected = items.find((u) => u.id === value);
+  const visibleItems = loadedTeamId === teamId && loadedConnectionId === connectionId ? items : [];
+  const selected = visibleItems.find((u) => u.id === value);
   const label = selected?.name ?? (value ? valueName : undefined) ?? t("linear.field.assignee.select");
   const disabled = !teamId;
 
@@ -89,7 +96,7 @@ export function AssigneeCombobox({ teamId, value, valueName, onChange }: Props) 
               <>
                 <CommandEmpty>{t("linear.field.assignee.empty")}</CommandEmpty>
                 <CommandGroup>
-                  {orderSelectedFirst(items, (u) => value === u.id).map((u) => {
+                  {orderSelectedFirst(visibleItems, (u) => value === u.id).map((u) => {
                     const sel = value === u.id;
                     return (
                       <CommandItem

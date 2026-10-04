@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist, createJSONStorage, type StateStorage } from "zustand/middleware";
 import type { PlatformId } from "@/types/platform";
+import type { DestinationProfile } from "@/types/connection";
 import type { EnvironmentRow } from "@/types/environment";
 import { migrateIssueToV4 } from "./issues-migrations";
 import { failClosedLocalStorage } from "./chrome-storage";
@@ -505,6 +506,8 @@ export interface IssueRecord {
   submissionRecoveryId?: string;
   submittedAt?: number;
   platform: PlatformId;
+  // Immutable provider/account/native-target snapshot. Legacy records have no binding and require resolution.
+  destinationBinding?: DestinationProfile;
   key?: string;
   url?: string;
   jiraSiteId?: string;

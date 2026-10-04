@@ -25,33 +25,40 @@ interface Props {
   value: string | undefined;
   valueName?: string;
   onChange: (labelId: string | undefined, labelName: string | undefined) => void;
+  connectionId?: string;
 }
 
-export function LabelCombobox({ teamId, value, valueName, onChange }: Props) {
+export function LabelCombobox({ teamId, value, valueName, onChange, connectionId }: Props) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<LinearLabel[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadedTeamId, setLoadedTeamId] = useState<string | null>(null);
+  const [loadedConnectionId, setLoadedConnectionId] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     if (!open || !teamId) return;
-    if (loadedTeamId === teamId && items.length > 0) return;
+    if (loadedTeamId === teamId && loadedConnectionId === connectionId && items.length > 0) return;
+    let active = true;
     setLoading(true);
     setError(null);
-    sendBg<LinearLabel[]>({ type: "linear.getLabels", teamId })
+    sendBg<LinearLabel[]>({ type: "linear.getLabels", teamId, ...(connectionId ? { connectionId } : {}) })
       .then((list) => {
+        if (!active) return;
         setItems(list);
         setLoadedTeamId(teamId);
+        setLoadedConnectionId(connectionId);
       })
-      .catch((err: unknown) =>
-        setError(err instanceof Error ? err.message : String(err)),
-      )
-      .finally(() => setLoading(false));
-  }, [open, teamId]);
+      .catch((err: unknown) => {
+        if (active) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [open, teamId, connectionId, loadedTeamId, loadedConnectionId, items.length]);
 
-  const selected = items.find((l) => l.id === value);
+  const visibleItems = loadedTeamId === teamId && loadedConnectionId === connectionId ? items : [];
+  const selected = visibleItems.find((l) => l.id === value);
   const label = selected?.name ?? (value ? valueName : undefined) ?? t("linear.field.labels.select");
   const disabled = !teamId;
 
@@ -89,7 +96,7 @@ export function LabelCombobox({ teamId, value, valueName, onChange }: Props) {
               <>
                 <CommandEmpty>{t("linear.field.labels.empty")}</CommandEmpty>
                 <CommandGroup>
-                  {items.map((l) => {
+                  {visibleItems.map((l) => {
                     const sel = value === l.id;
                     return (
                       <CommandItem

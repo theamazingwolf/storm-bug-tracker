@@ -56,11 +56,19 @@ export type RecoverySource =
   | { kind: "original"; store: "blobs" | "images" | "inlineImages" | "attachments"; key: string }
   | { kind: "generated"; key: string };
 
+export type RecoveryDestinationBinding =
+  | { id: string; platform: "github"; connectionId: string; owner: string; repo: string }
+  | { id: string; platform: "linear"; connectionId: string; organizationId: string; teamId: string; projectId?: string };
+
 export interface SubmissionRecoveryMeta {
   attemptId: string;
   issueId: string;
   title: string;
   platform: CreatedDestination["platform"];
+  /** Immutable provider target and credential identity selected before upload/create. */
+  destinationBinding?: RecoveryDestinationBinding;
+  /** Exact credential set selected before upload/create; retained for recovery and retry. */
+  connectionId?: string;
   createdAt: number;
   expiresAt: number;
   localFilesRemoved?: boolean;

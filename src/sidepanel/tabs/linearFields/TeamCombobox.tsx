@@ -28,26 +28,35 @@ export interface TeamValue {
 interface Props {
   value: TeamValue | null;
   onChange: (next: TeamValue | null) => void;
+  connectionId?: string;
 }
 
-export function TeamCombobox({ value, onChange }: Props) {
+export function TeamCombobox({ value, onChange, connectionId }: Props) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<LinearTeam[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadedConnectionId, setLoadedConnectionId] = useState<string | undefined>(undefined);
 
   useEffect(() => {
-    if (!open || items.length > 0) return;
+    if (!open || (items.length > 0 && loadedConnectionId === connectionId)) return;
+    let active = true;
     setLoading(true);
-    sendBg<LinearTeam[]>({ type: "linear.getTeams" })
-      .then(setItems)
-      .catch((err: unknown) =>
-        setError(err instanceof Error ? err.message : String(err)),
-      )
-      .finally(() => setLoading(false));
-  }, [open]);
+    sendBg<LinearTeam[]>({ type: "linear.getTeams", ...(connectionId ? { connectionId } : {}) })
+      .then((teams) => {
+        if (!active) return;
+        setItems(teams);
+        setLoadedConnectionId(connectionId);
+      })
+      .catch((err: unknown) => {
+        if (active) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [open, connectionId, items.length, loadedConnectionId]);
 
+  const visibleItems = loadedConnectionId === connectionId ? items : [];
   const label = value
     ? `${value.teamKey} — ${value.teamName}`
     : t("linear.field.team.select");
@@ -85,7 +94,7 @@ export function TeamCombobox({ value, onChange }: Props) {
               <>
                 <CommandEmpty>{t("linear.field.team.empty")}</CommandEmpty>
                 <CommandGroup>
-                  {items.map((team) => {
+                  {visibleItems.map((team) => {
                     const selected = value?.teamId === team.id;
                     return (
                       <CommandItem

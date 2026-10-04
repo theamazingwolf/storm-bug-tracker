@@ -63,9 +63,10 @@ export function initialLinearFields(
 interface Props {
   value: LinearIssueFieldsValue;
   onChange: (patch: Partial<LinearIssueFieldsValue>) => void;
+  connectionId?: string;
 }
 
-export function LinearIssueFields({ value, onChange }: Props) {
+export function LinearIssueFields({ value, onChange, connectionId }: Props) {
   const t = useT();
 
   const teamValue: TeamValue | null = value.teamId
@@ -76,6 +77,7 @@ export function LinearIssueFields({ value, onChange }: Props) {
     <div className="flex flex-col gap-4">
       <FieldRow label={t("linear.field.team")} required>
         <TeamCombobox
+          connectionId={connectionId}
           value={teamValue}
           onChange={(next) =>
             onChange(
@@ -110,6 +112,7 @@ export function LinearIssueFields({ value, onChange }: Props) {
       </FieldRow>
       <FieldRow label={t("linear.field.project")}>
         <ProjectCombobox
+          connectionId={connectionId}
           teamId={value.teamId}
           value={value.projectId}
           valueName={value.projectName}
@@ -118,6 +121,7 @@ export function LinearIssueFields({ value, onChange }: Props) {
       </FieldRow>
       <FieldRow label={t("linear.field.labels")}>
         <LabelCombobox
+          connectionId={connectionId}
           teamId={value.teamId}
           value={value.labelId}
           valueName={value.labelName}
@@ -126,6 +130,7 @@ export function LinearIssueFields({ value, onChange }: Props) {
       </FieldRow>
       <FieldRow label={t("linear.field.assignee")}>
         <AssigneeCombobox
+          connectionId={connectionId}
           teamId={value.teamId}
           value={value.assigneeId}
           valueName={value.assigneeName}
@@ -140,6 +145,7 @@ export function LinearIssueFields({ value, onChange }: Props) {
       </FieldRow>
       <FieldRow label={t("field.cc.label")}>
         <CcCombobox
+          connectionId={connectionId}
           teamId={value.teamId}
           value={value.cc ?? []}
           onChange={(cc) => onChange({ cc })}

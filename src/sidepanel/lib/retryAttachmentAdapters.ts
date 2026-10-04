@@ -181,15 +181,16 @@ const hrefOf = (cp: AttachmentCheckpoint) => cp.uploaded && "href" in cp.uploade
 
 const github: Adapter = async (ctx) => {
   const { locator } = dest<"github">(ctx);
+  const connection = ctx.meta.connectionId ? { connectionId: ctx.meta.connectionId } : {};
   const at = { owner: locator.owner, repo: locator.repo, number: Number(locator.number) };
-  const read = async () => (await sendBg<{ body?: string | null }>({ type: "github.getIssueBody", ...at }))?.body ?? "";
+  const read = async () => (await sendBg<{ body?: string | null }>({ type: "github.getIssueBody", ...at, ...connection }))?.body ?? "";
   await probe(read);
   await uploadStage(ctx, filesAt(ctx, "upload"), async (file, dataUrl) => {
-    const results = await sendBg<UploadFileResult[]>({ type: "github.uploadFiles", owner: at.owner, repo: at.repo, files: [entry(file, dataUrl)] });
+    const results = await sendBg<UploadFileResult[]>({ type: "github.uploadFiles", ...connection, owner: at.owner, repo: at.repo, files: [entry(file, dataUrl)] });
     return { platform: "github", href: uploadedFrom(results, file.id).href };
   });
   await bodyStage(ctx, { format: "markdown", read, value: hrefOf,
-    write: async (body) => { await sendBg({ type: "github.updateIssueBody", ...at, body }); return body; } });
+    write: async (body) => { await sendBg({ type: "github.updateIssueBody", ...at, ...connection, body }); return body; } });
 };
 
 const gitlab: Adapter = async (ctx) => {
@@ -286,10 +287,11 @@ function mediaSize(adf: string, mediaId: string | undefined): { width?: number; 
 
 const linear: Adapter = async (ctx) => {
   const { issueId } = dest<"linear">(ctx).locator;
-  const fetchIssue = () => sendBg<{ description: string; attachments: Array<{ id: string; url: string }> }>({ type: "linear.getIssueAttachments", issueId });
+  const connection = ctx.meta.connectionId ? { connectionId: ctx.meta.connectionId } : {};
+  const fetchIssue = () => sendBg<{ description: string; attachments: Array<{ id: string; url: string }> }>({ type: "linear.getIssueAttachments", ...connection, issueId });
   await probe(fetchIssue);
   await uploadStage(ctx, filesAt(ctx, "upload"), async (file, dataUrl) => {
-    const r = await sendBg<{ assetUrl?: string; fileId?: string }>({ type: "linear.uploadFile", fileId: file.id, filename: file.filename, contentType: file.contentType, dataUrl });
+    const r = await sendBg<{ assetUrl?: string; fileId?: string }>({ type: "linear.uploadFile", ...connection, fileId: file.id, filename: file.filename, contentType: file.contentType, dataUrl });
     if (!r?.assetUrl || r.fileId !== file.id) throw new UploadRejected({ stage: "upload", code: "invalid-response" });
     return { platform: "linear", href: r.assetUrl };
   });
@@ -302,7 +304,7 @@ const linear: Adapter = async (ctx) => {
       if (linked.includes(url)) { await ctx.save({ fileId: file.id, link: "done" }); ctx.emit(file.id, "link", "done"); continue; }
       await ctx.save({ fileId: file.id, link: "unknown" });
       const ok = await guarded(ctx, [file.id], "link", async () => {
-        const r = await sendBg<{ ok: boolean }>({ type: "linear.createAttachment", issueId, title: file.filename, url });
+        const r = await sendBg<{ ok: boolean }>({ type: "linear.createAttachment", ...connection, issueId, title: file.filename, url });
         if (r?.ok !== true) throw Object.assign(new Error("Linear attachment was not acknowledged"), { status: 200 });
         return true;
       }, (failure) => [{ fileId: file.id, link: failedStageState(failure) }]);
@@ -313,7 +315,7 @@ const linear: Adapter = async (ctx) => {
   }
   await bodyStage(ctx, { format: "markdown", read: async () => (await fetchIssue()).description ?? "", value: hrefOf,
     write: async (description) => {
-      const r = await sendBg<{ ok: boolean }>({ type: "linear.updateIssueDescription", issueId, description });
+      const r = await sendBg<{ ok: boolean }>({ type: "linear.updateIssueDescription", ...connection, issueId, description });
       if (r?.ok !== true) throw Object.assign(new Error("Linear update was not acknowledged"), { status: 200 });
       return description;
     } });

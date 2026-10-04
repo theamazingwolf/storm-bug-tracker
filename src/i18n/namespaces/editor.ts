@@ -159,6 +159,13 @@ const ko = {
   "preview.copyMarkdown": "복사",
   "preview.newIssue": "다른 이슈 작성",
 
+  "destination.label": "제출 대상",
+  "destination.choose": "대상 선택",
+  "destination.ambiguous": "이 웹사이트에 저장된 대상이 여러 개 있습니다. 하나를 선택하세요.",
+  "destination.unmatched": "이 웹사이트에 저장된 대상이 없습니다.",
+  "destination.remember": "이 웹사이트에 기억",
+  "destination.connectionMissing": "저장된 연결을 사용할 수 없습니다. 다시 연결하거나 다른 대상을 선택하세요.",
+
   "codeBlock.expand": "펼치기 ({count}줄)",
   "codeBlock.collapse": "접기",
   "codeBlock.copy": "복사",
@@ -329,6 +336,13 @@ const en = {
   "preview.copyMarkdown": "Copy",
   "preview.newIssue": "New issue",
 
+  "destination.label": "Destination",
+  "destination.choose": "Choose destination",
+  "destination.ambiguous": "This website has multiple saved destinations. Choose one.",
+  "destination.unmatched": "No destination is saved for this website.",
+  "destination.remember": "Remember for this website",
+  "destination.connectionMissing": "This saved connection is unavailable. Reconnect or choose another destination.",
+
   "codeBlock.expand": "Expand ({count} lines)",
   "codeBlock.collapse": "Collapse",
   "codeBlock.copy": "Copy",
@@ -496,6 +510,13 @@ const fr = {
   "preview.copied": "Copié",
   "preview.copyMarkdown": "Copier",
   "preview.newIssue": "Nouveau ticket",
+
+  "destination.label": "Destination",
+  "destination.choose": "Choisir une destination",
+  "destination.ambiguous": "Plusieurs destinations sont enregistrées pour ce site. Choisissez-en une.",
+  "destination.unmatched": "Aucune destination n’est enregistrée pour ce site.",
+  "destination.remember": "Mémoriser pour ce site",
+  "destination.connectionMissing": "Cette connexion enregistrée est indisponible. Reconnectez-la ou choisissez une autre destination.",
 
   "codeBlock.expand": "Développer ({count} lignes)",
   "codeBlock.collapse": "Réduire",

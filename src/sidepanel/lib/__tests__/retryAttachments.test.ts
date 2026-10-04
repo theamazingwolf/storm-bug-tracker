@@ -20,6 +20,7 @@ let runner: typeof import("../retryAttachments");
 let patch: typeof import("../attachmentBodyPatch");
 let db: typeof import("@/store/blob-db");
 let store: typeof import("@/store/issues-store");
+let settings: typeof import("@/store/settings-store");
 let persisted: Record<string, unknown>;
 
 beforeEach(async () => {
@@ -43,6 +44,7 @@ beforeEach(async () => {
   });
   db = await import("@/store/blob-db");
   store = await import("@/store/issues-store");
+  settings = await import("@/store/settings-store");
   patch = await import("../attachmentBodyPatch");
   runner = await import("../retryAttachments");
 });
@@ -96,11 +98,20 @@ async function seed(o: {
   identity?: string | null;
   bodyLocale?: LocaleMode;
   noSnapshot?: boolean;
+  connectionId?: string;
   submittedAt?: number;
   results?: AttachmentResult[];
 }): Promise<void> {
   const destination = o.destination ?? GITHUB;
   const platform = destination.platform;
+  const connectionId = `test-${platform}`;
+  settings.useSettingsStore.setState((state) => ({
+    ...state,
+    connections: {
+      github: platform === "github" ? [{ id: connectionId, platform: "github", account: { platform: "github", auth: { kind: "pat", pat: "dummy", viewerLogin: "tester" }, defaults: {}, connectedAt: 1 } as never }] : [],
+      linear: platform === "linear" ? [{ id: connectionId, platform: "linear", account: { platform: "linear", auth: { kind: "apiKey", apiKey: "dummy", viewerName: "tester" }, defaults: {}, connectedAt: 1 } as never }] : [],
+    },
+  }));
   const generated = new Map<string, Blob>();
   const files = o.files.map((f) => {
     if (f.original) return { id: f.id, kind: f.kind, filename: f.filename, contentType: f.contentType, source: f.original };
@@ -108,7 +119,7 @@ async function seed(o: {
     generated.set(key, new Blob([f.bytes ?? f.id], { type: f.contentType }));
     return { id: f.id, kind: f.kind, filename: f.filename, contentType: f.contentType, source: { kind: "generated" as const, key } };
   });
-  const meta: SubmissionRecoveryMeta = { attemptId: "a", issueId: "i", title: "Report", platform, createdAt: 1, expiresAt: Date.now() + 86_400_000, updatedAt: 1, phase: "prepared", files, results: [] };
+  const meta: SubmissionRecoveryMeta = { attemptId: "a", issueId: "i", title: "Report", platform, ...(o.connectionId ? { connectionId: o.connectionId } : {}), createdAt: 1, expiresAt: Date.now() + 86_400_000, updatedAt: 1, phase: "prepared", files, results: [] };
   await db.beginSubmissionRecovery(meta, generated);
   const checkpoints = o.checkpoints ?? o.files.map((f) => cp(f.id));
   if (!o.noSnapshot) {
@@ -150,6 +161,26 @@ function github(remote: { body: string }, extra: Record<string, Handler> = {}): 
 const CREATE_TYPES = /\.(submitIssue|submitPage|createIssue|postMessage)$/;
 
 describe("retryAttachments — GitHub stage resume", () => {
+  it("keeps retry bound to its stored connection after the selected account changes", async () => {
+    const plan = ghPlan({}, [capture.id]);
+    await seed({ files: [capture], bodyPlan: plan, connectionId: "bound-gh" });
+    const active = settings.useSettingsStore.getState().connections.github[0];
+    settings.useSettingsStore.setState((state) => ({
+      ...state,
+      connections: { ...state.connections, github: [
+        { ...active, id: "bound-gh" },
+        { ...active, id: "currently-selected" },
+      ] },
+      selectedConnectionIds: { ...state.selectedConnectionIds, github: "currently-selected" },
+    }));
+    const remote = { body: plan.lastWritten };
+    rpc(github(remote));
+
+    expect((await runner.retryAttachments("i")).status).toBe("complete");
+    expect(sendBg.mock.calls).toHaveLength(6);
+    expect(sendBg.mock.calls.every(([msg]) => msg.connectionId === "bound-gh")).toBe(true);
+  });
+
   it("uploads only the failed file, patches the body once, never creates and finalizes durably", async () => {
     const plan = ghPlan({ logs: HREF.logs }, [capture.id]);
     await seed({ files: [capture, logs], checkpoints: [cp(capture.id), done(logs.id, HREF.logs)], bodyPlan: plan });

@@ -5,6 +5,7 @@ import { MissingSubmissionFilesError } from "@/types/attachment";
 import type { AttachmentBodyPlan, AttachmentCheckpoint, AttachmentCheckpointPatch, AttachmentResult, CreatedDestination, RecoverySource, RetryPlatform, SubmissionFile, SubmissionRecoveryMeta } from "@/types/attachment";
 import type { LocaleMode } from "@/i18n/locales";
 import type { NormalizedSubmitResult, PlatformId } from "@/types/platform";
+import { cloneDestinationBinding } from "./destinationBinding";
 import {
   beginSubmissionRecovery, blobToDataUrl, dataUrlToBlob, checkpointSubmission, checkpointAttachmentRetry, cleanupSubmissionOriginals, initializeAttachmentRetry,
   removeSubmissionRecoveryFiles, deleteSubmissionRecovery, discardPreparedSubmission, discardRejectedSubmission, dismissUnknownSubmission, expireSubmissionRecovery,
@@ -70,6 +71,12 @@ export async function prepareSubmissionRecovery(input: {
   const files: SubmissionFile[] = [];
   const meta: SubmissionRecoveryMeta = {
     issueId: input.issue.id, attemptId, title: input.issue.title, platform: input.platform,
+    ...(input.issue.destinationBinding?.platform === input.platform
+      ? {
+          destinationBinding: cloneDestinationBinding(input.issue.destinationBinding),
+          connectionId: input.issue.destinationBinding.connectionId,
+        }
+      : {}),
     createdAt, expiresAt: createdAt + 30 * 24 * 60 * 60 * 1000, updatedAt: createdAt,
     phase: "prepared", files: [], results: [],
   };
@@ -117,12 +124,12 @@ const IDENTITY_TIMEOUT_MS = 10_000;
 // withSubmissionProgress hands the submitted ctx.bodyLocale to the run that owns the progress.
 const localeBinders = new WeakMap<SubmissionProgress, (locale: LocaleMode) => void>();
 
-async function lookupAccountIdentity(destination: CreatedDestination): Promise<string | null> {
+async function lookupAccountIdentity(destination: CreatedDestination, connectionId?: string): Promise<string | null> {
   if (destination.platform === "webhook") return null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const result = await Promise.race([
-      sendBg<{ identity?: unknown }>({ type: `${destination.platform}.getAccountIdentity`, destination }),
+      sendBg<{ identity?: unknown }>({ type: `${destination.platform}.getAccountIdentity`, destination, ...(connectionId ? { connectionId } : {}) }),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("Identity lookup timed out")), IDENTITY_TIMEOUT_MS); }),
     ]);
     const identity = result?.identity;
@@ -141,8 +148,12 @@ const completed = (r: AttachmentResult) => r.delivery === "attached" && r.presen
 
 async function restoreRecord(meta: SubmissionRecoveryMeta): Promise<void> {
   const current = useIssuesStore.getState().issues.find((i) => i.id === meta.issueId);
-  const patch = { submissionRecoveryId: meta.attemptId, updatedAt: Math.max(Date.now(), (current?.updatedAt ?? 0) + 1) };
-  if (current?.submissionRecoveryId === meta.attemptId) return;
+  const patch = {
+    submissionRecoveryId: meta.attemptId,
+    updatedAt: Math.max(Date.now(), (current?.updatedAt ?? 0) + 1),
+    ...(!current?.destinationBinding && meta.destinationBinding ? { destinationBinding: meta.destinationBinding } : {}),
+  };
+  if (current?.submissionRecoveryId === meta.attemptId && (current.destinationBinding || !meta.destinationBinding)) return;
   await persistIssuesMutation(() => useIssuesStore.setState((s) => ({ issues: current
     ? s.issues.map((i) => i.id === meta.issueId ? { ...i, ...patch } : i)
     : [...s.issues, { id: meta.issueId, title: meta.title, platform: meta.platform, createdAt: meta.createdAt,
@@ -307,7 +318,7 @@ export async function runSubmissionRecovery(
     const enriched = !destination.url && result.key === destination.key && result.url ? { ...destination, url: result.url } : destination;
     await writes;
     if (phase === "partial" && snapshotReady && !retryDisabled) {
-      const identity = await lookupAccountIdentity(enriched);
+      const identity = await lookupAccountIdentity(enriched, prepared.meta.connectionId);
       // An unverified identity only blocks automatic retry; the partial result still completes.
       if (identity) await writeRetry({ accountIdentity: identity });
     }

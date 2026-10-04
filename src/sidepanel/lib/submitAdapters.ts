@@ -115,6 +115,7 @@ export function jiraLastSubmitFields(input: {
 }
 
 export function githubSubmitArgs(input: SubmitBase & MediaGuard & {
+  connectionId?: string;
   fields: GithubIssueFieldsValue;
   owner: string;
   repo: string;
@@ -126,6 +127,7 @@ export function githubSubmitArgs(input: SubmitBase & MediaGuard & {
     inlineImages,
     owner: input.owner,
     repo: input.repo,
+    ...(input.connectionId ? { connectionId: input.connectionId } : {}),
     label: fields.label,
     assignee: fields.assignee,
     cc: fields.cc,
@@ -149,6 +151,7 @@ export function githubLastSubmitFields(
 }
 
 export function linearSubmitArgs(input: SubmitBase & {
+  connectionId?: string;
   fields: LinearIssueFieldsValue;
   teamId: string;
 }): LinearSubmitInput {
@@ -158,6 +161,7 @@ export function linearSubmitArgs(input: SubmitBase & {
     ...media(captureFiles),
     inlineImages,
     teamId: input.teamId,
+    ...(input.connectionId ? { connectionId: input.connectionId } : {}),
     projectId: fields.projectId,
     labelId: fields.labelId,
     assigneeId: fields.assigneeId,

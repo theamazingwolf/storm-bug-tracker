@@ -770,13 +770,23 @@ function validateRetrySnapshot(value: unknown, ids: Set<string>, platform: strin
 }
 
 function validateRecovery(value: unknown): SubmissionRecoveryMeta {
-  const meta = record(value, ["attemptId", "issueId", "title", "platform", "createdAt", "expiresAt", "phase", "destination", "files", "results", "updatedAt", "localFilesRemoved", "submissionFailure", "retry"]);
+  const meta = record(value, ["attemptId", "issueId", "title", "platform", "destinationBinding", "connectionId", "createdAt", "expiresAt", "phase", "destination", "files", "results", "updatedAt", "localFilesRemoved", "submissionFailure", "retry"]);
   if (!nonempty(meta.attemptId) || !nonempty(meta.issueId) || typeof meta.title !== "string"
     || typeof meta.platform !== "string" || !Object.hasOwn(DESTINATION_KEYS, meta.platform)
+    || (meta.connectionId !== undefined && !nonempty(meta.connectionId))
     || typeof meta.phase !== "string" || !Object.hasOwn(RECOVERY_TRANSITIONS, meta.phase)
     || ![meta.createdAt, meta.expiresAt, meta.updatedAt].every((n) => typeof n === "number" && Number.isFinite(n))
     || !Array.isArray(meta.files) || !Array.isArray(meta.results)) throw new Error("Invalid recovery metadata");
   if (meta.localFilesRemoved !== undefined && typeof meta.localFilesRemoved !== "boolean") throw new Error("Invalid recovery expiry marker");
+  if (meta.destinationBinding !== undefined) {
+    const binding = record(meta.destinationBinding, ["id", "platform", "connectionId", "owner", "repo", "organizationId", "teamId", "projectId"]);
+    if (!nonempty(binding.id) || !nonempty(binding.connectionId) || binding.connectionId !== meta.connectionId || binding.platform !== meta.platform) throw new Error("Invalid recovery destination binding");
+    if (binding.platform === "github") {
+      if (!nonempty(binding.owner) || !nonempty(binding.repo) || binding.organizationId !== undefined || binding.teamId !== undefined || binding.projectId !== undefined) throw new Error("Invalid GitHub recovery binding");
+    } else if (binding.platform === "linear") {
+      if (!nonempty(binding.organizationId) || !nonempty(binding.teamId) || (binding.projectId !== undefined && !nonempty(binding.projectId)) || binding.owner !== undefined || binding.repo !== undefined) throw new Error("Invalid Linear recovery binding");
+    } else throw new Error("Invalid recovery destination binding platform");
+  }
   const ids = new Set<string>();
   for (const value of meta.files) {
     const file = record(value, ["id", "kind", "filename", "contentType", "source", "originalSource"]);

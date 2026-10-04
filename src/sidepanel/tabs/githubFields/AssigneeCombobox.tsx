@@ -9,9 +9,10 @@ interface Props {
   repo: string | undefined;
   value: string | undefined;
   onChange: (next: string | undefined) => void;
+  connectionId?: string;
 }
 
-export function AssigneeCombobox({ owner, repo, value, onChange }: Props) {
+export function AssigneeCombobox({ owner, repo, value, onChange, connectionId }: Props) {
   const t = useT();
   const ready = !!owner && !!repo;
   const load = useCallback(
@@ -20,8 +21,9 @@ export function AssigneeCombobox({ owner, repo, value, onChange }: Props) {
         type: "github.searchAssignees",
         owner: owner!,
         repo: repo!,
+        ...(connectionId ? { connectionId } : {}),
       }),
-    [owner, repo],
+    [owner, repo, connectionId],
   );
 
   const triggerLabel = (() => {

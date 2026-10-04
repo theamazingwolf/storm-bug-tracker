@@ -45,6 +45,21 @@ beforeEach(() => {
 });
 
 describe("submitToGithub log attachment outcomes", () => {
+  it("carries the draft's stored connection ID to upload and creation", async () => {
+    sendBg.mockImplementation(async (msg: { type: string }) => {
+      if (msg.type === "github.uploadFiles") return [];
+      if (msg.type === "github.submitIssue") return ISSUE;
+      return undefined;
+    });
+    await submitToGithub(preparedInput({
+      ctx: makeCtx(), owner: "o", repo: "r", connectionId: "gh-draft",
+      logs: [{ filename: "logs.html", dataUrl: "data:LOGS" }],
+    }));
+    expect(sendBg.mock.calls.map(([msg]) => msg)).toEqual([
+      expect.objectContaining({ type: "github.uploadFiles", connectionId: "gh-draft" }),
+      expect.objectContaining({ type: "github.submitIssue", connectionId: "gh-draft" }),
+    ]);
+  });
   it("logs.html 업로드가 href:null(영상/용량 초과)이면 logs 파일 실패 결과", async () => {
     sendBg.mockImplementation(async (msg: { type: string }) => {
       if (msg.type === "github.uploadFiles")

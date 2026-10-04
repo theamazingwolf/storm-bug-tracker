@@ -37,9 +37,10 @@ export function initialGhFields(
 interface Props {
   value: GithubIssueFieldsValue;
   onChange: (patch: Partial<GithubIssueFieldsValue>) => void;
+  connectionId?: string;
 }
 
-export function GithubIssueFields({ value, onChange }: Props) {
+export function GithubIssueFields({ value, onChange, connectionId }: Props) {
   const t = useT();
   const repoValue: RepoValue | null =
     value.owner && value.repo ? { owner: value.owner, repo: value.repo } : null;
@@ -48,6 +49,7 @@ export function GithubIssueFields({ value, onChange }: Props) {
     <div className="flex flex-col gap-4">
       <FieldRow label={t("github.field.repo")} required>
         <RepoCombobox
+          connectionId={connectionId}
           value={repoValue}
           onChange={(next) =>
             onChange(
@@ -62,6 +64,7 @@ export function GithubIssueFields({ value, onChange }: Props) {
         <LabelCombobox
           owner={value.owner}
           repo={value.repo}
+          connectionId={connectionId}
           value={value.label}
           onChange={(label) => onChange({ label })}
         />
@@ -70,6 +73,7 @@ export function GithubIssueFields({ value, onChange }: Props) {
         <AssigneeCombobox
           owner={value.owner}
           repo={value.repo}
+          connectionId={connectionId}
           value={value.assignee}
           onChange={(assignee) => onChange({ assignee })}
         />
@@ -78,6 +82,7 @@ export function GithubIssueFields({ value, onChange }: Props) {
         <CcCombobox
           owner={value.owner}
           repo={value.repo}
+          connectionId={connectionId}
           value={value.cc ?? []}
           onChange={(cc) => onChange({ cc })}
         />

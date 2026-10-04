@@ -29,16 +29,18 @@ export interface RepoValue {
 interface Props {
   value: RepoValue | null;
   onChange: (next: RepoValue | null) => void;
+  connectionId?: string;
   disabled?: boolean;
 }
 
-export function RepoCombobox({ value, onChange, disabled }: Props) {
+export function RepoCombobox({ value, onChange, connectionId, disabled }: Props) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<GithubRepo[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadedConnectionId, setLoadedConnectionId] = useState<string | undefined>(undefined);
   const reqIdRef = useRef(0);
 
   useEffect(() => {
@@ -47,10 +49,11 @@ export function RepoCombobox({ value, onChange, disabled }: Props) {
     const timer = window.setTimeout(() => {
       setLoading(true);
       setError(null);
-      sendBg<GithubRepo[]>({ type: "github.searchRepos", query })
+      sendBg<GithubRepo[]>({ type: "github.searchRepos", query, ...(connectionId ? { connectionId } : {}) })
         .then((list) => {
           if (myReq !== reqIdRef.current) return;
           setItems(list);
+          setLoadedConnectionId(connectionId);
         })
         .catch((err: unknown) => {
           if (myReq !== reqIdRef.current) return;
@@ -62,8 +65,9 @@ export function RepoCombobox({ value, onChange, disabled }: Props) {
         });
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [open, query]);
+  }, [open, query, connectionId]);
 
+  const visibleItems = loadedConnectionId === connectionId ? items : [];
   const label = value ? `${value.owner}/${value.repo}` : t("github.field.repo.select");
 
   return (
@@ -104,7 +108,7 @@ export function RepoCombobox({ value, onChange, disabled }: Props) {
               <>
                 <CommandEmpty>{t("github.field.repo.empty")}</CommandEmpty>
                 <CommandGroup>
-                  {items.map((r) => {
+                  {visibleItems.map((r) => {
                     const selected =
                       value?.owner === r.owner && value?.repo === r.name;
                     // 이슈를 못 여는 repo는 제출 시점에야 410/403으로 실패한다.

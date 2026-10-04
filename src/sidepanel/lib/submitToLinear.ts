@@ -32,6 +32,7 @@ export interface LinearSubmitInput extends SubmissionAdapterInput {
   attachments?: LinearFileInput[];
   inlineImages?: InlineImageInput[];
   teamId: string;
+  connectionId?: string;
   projectId?: string;
   labelId?: string;
   assigneeId?: string;
@@ -39,10 +40,11 @@ export interface LinearSubmitInput extends SubmissionAdapterInput {
   cc?: { id: string; name: string }[];
 }
 
-async function uploadFile(file: LinearFileInput): Promise<LinearMediaInput> {
+async function uploadFile(file: LinearFileInput, connectionId?: string): Promise<LinearMediaInput> {
   const { assetUrl, fileId } = await sendBg<{ assetUrl: string; fileId?: string }>({
     ...(file.fileId ? { fileId: file.fileId } : {}),
     type: "linear.uploadFile",
+    ...(connectionId ? { connectionId } : {}),
     filename: file.filename,
     contentType: file.contentType ?? guessUploadMime(file.filename),
     dataUrl: file.dataUrl,
@@ -58,7 +60,7 @@ export async function submitToLinear(
   const progress = input.progress;
   // Pre-create uploads are strict (any failure aborts before creation), so only successes are recorded.
   const uploadAndCheckpoint = async (file: LinearFileInput): Promise<LinearMediaInput> => {
-    const uploaded = await uploadFile(file);
+    const uploaded = await uploadFile(file, input.connectionId);
     if (file.fileId) await progress?.fileCheckpoint({ fileId: file.fileId, upload: "done", uploaded: { platform: "linear", href: uploaded.assetUrl! } });
     return uploaded;
   };
@@ -111,6 +113,7 @@ export async function submitToLinear(
 
   const result = await submitCreation(input.progress, () => sendBg<LinearCreateIssueResult>({
     type: "linear.submitIssue",
+    ...(input.connectionId ? { connectionId: input.connectionId } : {}),
     payload: {
       teamId: input.teamId,
       title: input.ctx.title.trim(),
@@ -137,7 +140,7 @@ export async function submitToLinear(
     try {
       const dataUrl = !input.submissionFiles && isLog && file.filename === "logs.html"
         ? await injectIssueUrl(file.dataUrl, result.url, result.identifier) : file.dataUrl;
-      uploaded = await uploadFile({ ...file, dataUrl });
+      uploaded = await uploadFile({ ...file, dataUrl }, input.connectionId);
     } catch (error) {
       const failure = safeAttachmentFailure(error);
       responses.push({ fileId: file.fileId, ok: false, failure });
@@ -148,7 +151,7 @@ export async function submitToLinear(
     let linked = false;
     let linkFailure: ReturnType<typeof safeAttachmentFailure> | undefined;
     try {
-      const response = await sendBg<{ ok: boolean }>({ type: "linear.createAttachment", issueId: result.id, title: file.displayName ?? file.filename, url: uploaded.assetUrl! });
+      const response = await sendBg<{ ok: boolean }>({ type: "linear.createAttachment", ...(input.connectionId ? { connectionId: input.connectionId } : {}), issueId: result.id, title: file.displayName ?? file.filename, url: uploaded.assetUrl! });
       linked = response?.ok === true;
     } catch (error) { linkFailure = safeAttachmentFailure(error, "link"); /* The body link is an independent delivery path for logs. */ }
     if (file.fileId) await progress?.fileCheckpoint({ fileId: file.fileId, link: linked ? "done" : linkFailure ? failedStageState(linkFailure) : "failed" });
@@ -161,7 +164,7 @@ export async function submitToLinear(
     if (linkedBody !== body) {
       let bodyFailure: ReturnType<typeof safeAttachmentFailure> | undefined;
       try {
-        const response = await sendBg<{ ok: boolean }>({ type: "linear.updateIssueDescription", issueId: result.id, description: linkedBody });
+        const response = await sendBg<{ ok: boolean }>({ type: "linear.updateIssueDescription", ...(input.connectionId ? { connectionId: input.connectionId } : {}), issueId: result.id, description: linkedBody });
         bodyLinked = response?.ok === true;
       } catch (error) { bodyFailure = safeAttachmentFailure(error, "body"); /* Preserve the native attachment result. */ }
       if (file.fileId) {

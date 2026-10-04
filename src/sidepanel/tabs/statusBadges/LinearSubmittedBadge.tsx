@@ -30,16 +30,18 @@ export function LinearSubmittedBadge({
   const t = useT();
   const linearAccount = useSettingsStore((s) => s.accounts.linear);
   const patchIssue = useIssuesStore((s) => s.patchIssue);
+  const connectionId = useIssuesStore((s) => s.issues.find((issue) => issue.id === issueId)?.destinationBinding?.connectionId);
+  const boundConnection = useSettingsStore((s) => connectionId ? s.connections.linear.find((connection) => connection.id === connectionId) : undefined);
   const [status, setStatus] = useState<LinearIssueStatus | BadgeErrorKind | null>(null);
 
   useEffect(() => {
     const identifier = linearIdentifier ?? issueKey;
-    if (!linearAccount?.auth || !identifier) {
+    if (!(connectionId ? boundConnection : linearAccount?.auth) || !identifier) {
       setStatus("error");
       onLoaded();
       return;
     }
-    sendBg<LinearIssueStatus>({ type: "linear.getIssueStatus", issueId: identifier })
+    sendBg<LinearIssueStatus>({ type: "linear.getIssueStatus", issueId: identifier, ...(connectionId ? { connectionId } : {}) })
       .then((res) => {
         setStatus(res);
         const patch: Partial<IssueRecord> = {};
@@ -50,17 +52,18 @@ export function LinearSubmittedBadge({
       })
       .catch((err) => setStatus(classifyBadgeError(err)))
       .finally(onLoaded);
-  }, [linearAccount?.auth, linearIdentifier, issueKey, refreshKey, onLoaded, issueId, patchIssue]);
+  }, [linearAccount?.auth, boundConnection, linearIdentifier, issueKey, refreshKey, onLoaded, issueId, patchIssue, connectionId]);
 
   if (status === "error" || status === "deleted") {
     return <BadgeFallback kind={status} />;
   }
   if (!status) return <BadgeFallback kind="loading" />;
-  if (linearAccount?.auth && status.id) {
+  if ((connectionId ? boundConnection : linearAccount?.auth) && status.id) {
     return (
       <LinearStatusBadge
         issueId={status.id}
         issueIdentifier={status.identifier}
+        connectionId={connectionId}
         currentState={status.state}
         onStatusChanged={setStatus}
       />

@@ -138,6 +138,10 @@ describe("github", () => {
     });
   });
 
+  it("connectionId를 submission input에 그대로 고정한다", () => {
+    expect(githubSubmitArgs({ ctx, inlineImages, captureFiles, fields, owner: "o", repo: "r", connectionId: "gh-draft" }).connectionId).toBe("gh-draft");
+  });
+
   // Slack 승격 경로에서만 켠다 — 미디어 업로드가 실패하면 등록 전에 중단해야 원본이 안 날아간다.
   it("requireMediaUpload를 넘기면 그대로 실린다", () => {
     expect(
@@ -191,6 +195,10 @@ describe("linear", () => {
       priority: 2,
       cc,
     });
+  });
+
+  it("connectionId를 submission input에 그대로 고정한다", () => {
+    expect(linearSubmitArgs({ ctx, inlineImages, captureFiles, fields, teamId: "t1", connectionId: "linear-draft" }).connectionId).toBe("linear-draft");
   });
 
   it("lastSubmitFields는 화이트리스트 키만 남긴다", () => {

@@ -31,6 +31,8 @@ export function GithubSubmittedBadge({
   const t = useT();
   const ghAccount = useSettingsStore((s) => s.accounts.github);
   const patchIssue = useIssuesStore((s) => s.patchIssue);
+  const connectionId = useIssuesStore((s) => s.issues.find((issue) => issue.id === issueId)?.destinationBinding?.connectionId);
+  const boundConnection = useSettingsStore((s) => connectionId ? s.connections.github.find((connection) => connection.id === connectionId) : undefined);
   const [status, setStatus] = useState<GithubBadgeStatus | BadgeErrorKind | null>(null);
 
   const ghCoords = useMemo(
@@ -39,7 +41,7 @@ export function GithubSubmittedBadge({
   );
 
   useEffect(() => {
-    if (!ghAccount || !ghCoords) {
+    if (!(connectionId ? boundConnection : ghAccount) || !ghCoords) {
       setStatus("error");
       onLoaded();
       return;
@@ -49,6 +51,7 @@ export function GithubSubmittedBadge({
       owner: ghCoords.owner,
       repo: ghCoords.repo,
       number: ghCoords.number,
+      ...(connectionId ? { connectionId } : {}),
     })
       .then((res) => {
         setStatus(
@@ -65,7 +68,7 @@ export function GithubSubmittedBadge({
       })
       .catch((err) => setStatus(classifyBadgeError(err)))
       .finally(onLoaded);
-  }, [ghAccount, ghCoords, refreshKey, onLoaded, issueId, patchIssue, githubOwner, githubRepo]);
+  }, [ghAccount, boundConnection, ghCoords, refreshKey, onLoaded, issueId, patchIssue, githubOwner, githubRepo, connectionId]);
 
   if (status === "error" || status === "deleted") {
     return <BadgeFallback kind={status} />;
@@ -79,6 +82,7 @@ export function GithubSubmittedBadge({
         owner={ghCoords.owner}
         repo={ghCoords.repo}
         number={ghCoords.number}
+        connectionId={connectionId}
         onStatusChanged={setStatus}
       />
     );

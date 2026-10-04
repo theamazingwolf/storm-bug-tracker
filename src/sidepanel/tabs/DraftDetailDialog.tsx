@@ -81,6 +81,9 @@ import { submitToSlack } from "@/sidepanel/lib/submitToSlack";
 import { submitToWebhook } from "@/sidepanel/lib/submitToWebhook";
 import { formatTimestamp } from "@/sidepanel/lib/formatTimestamp";
 import type { NotionDatabaseSchema } from "@/types/notion";
+import type { DestinationProfile } from "@/types/connection";
+import { cloneDestinationBinding, resolveDestinationBinding } from "@/sidepanel/lib/destinationBinding";
+import { githubFieldsForDestination, linearFieldsForDestination } from "@/sidepanel/lib/boundDestinationFields";
 import { usePlatformFields } from "@/sidepanel/hooks/usePlatformFields";
 import { extractNotionPageId } from "@/lib/notion-page-id";
 import { DraftEditDialog } from "./DraftEditDialog";
@@ -237,6 +240,7 @@ function EditableDraftDetailDialog({
 
   const [fields, setFields] = useState<SubmitFields>({});
   const [submitOpen, setSubmitOpen] = useState(false);
+  const [destinationBinding, setDestinationBinding] = useState<DestinationProfile | null>(issue?.destinationBinding ?? null);
 
   const lastJiraSubmit = useSettingsStore((s) => s.lastSubmitFields.jira);
   const lastGhSubmit = useSettingsStore((s) => s.lastSubmitFields.github);
@@ -247,13 +251,17 @@ function EditableDraftDetailDialog({
   const lastClickupSubmit = useSettingsStore((s) => s.lastSubmitFields.clickup);
   const lastSlackSubmit = useSettingsStore((s) => s.lastSubmitFields.slack);
   const lastSubmittedPlatform = useSettingsStore((s) => s.lastSubmittedPlatform);
+  const destinationProfiles = useSettingsStore((s) => s.destinationProfiles);
 
   const navTo = useTabNav();
 
   // Slack 보존 이슈는 Slack 탭을 제외(승격 전용). 그 외엔 연결된 전체 플랫폼.
   const available = useMemo(
-    () => (issue ? submittablePlatforms(issue, accounts) : connectedPlatforms(accounts)),
-    [issue, accounts],
+    () => Array.from(new Set([
+      ...(issue ? submittablePlatforms(issue, accounts) : connectedPlatforms(accounts)),
+      ...destinationProfiles.map((profile) => profile.platform),
+    ])),
+    [issue, accounts, destinationProfiles],
   );
   const initialPlatform = useMemo(
     () => resolveInitialPlatform(pickInitialPlatform(accounts, lastSubmittedPlatform), available),
@@ -296,6 +304,21 @@ function EditableDraftDetailDialog({
   const [notionSchema, setNotionSchema] = useState<NotionDatabaseSchema | null>(null);
   const [editTarget, setEditTarget] = useState<DraftEditTarget | null>(null);
 
+  function handleDestinationBindingChange(binding: DestinationProfile | null) {
+    setDestinationBinding(binding);
+    if (!issue) return;
+    patchIssue(issue.id, { destinationBinding: binding ? cloneDestinationBinding(binding) : undefined, ...(binding ? { platform: binding.platform } : {}) });
+    if (binding?.platform === "github") {
+      const connection = useSettingsStore.getState().connections.github.find((item) => item.id === binding.connectionId);
+      setGhFields(githubFieldsForDestination(binding, connection));
+    }
+    if (binding?.platform === "linear") {
+      const connection = useSettingsStore.getState().connections.linear.find((item) => item.id === binding.connectionId);
+      setLinearFields(linearFieldsForDestination(binding, connection, binding));
+    }
+    if (binding) setPlatform(binding.platform);
+  }
+
   // 다이얼로그 진입 prefill — open / issue.id 변경 시에만 동작.
   // 사용자가 SubmitFieldsDialog의 Tab으로 platform을 바꾸면 patchIssue로 issue.platform이
   // 갱신되는데, 그걸 deps에 넣으면 이 effect가 재실행되어 setSubmitOpen(false)/setPlatform(initial)이
@@ -316,7 +339,16 @@ function EditableDraftDetailDialog({
         ? issue.platform
         : pickInitialPlatform(accounts, lastSubmittedPlatform);
     // Slack 보존 이슈는 issue.platform이 "slack"이라 available에서 빠지므로 첫 트래커로 보정.
-    setPlatform(resolveInitialPlatform(picked, available));
+    setPlatform(resolveInitialPlatform(issue?.destinationBinding?.platform ?? picked, available));
+    setDestinationBinding(issue?.destinationBinding ?? null);
+    if (issue?.destinationBinding?.platform === "github") {
+      const connection = useSettingsStore.getState().connections.github.find((item) => item.id === issue.destinationBinding?.connectionId);
+      setGhFields(githubFieldsForDestination(issue.destinationBinding, connection));
+    } else if (issue?.destinationBinding?.platform === "linear") {
+      const connection = useSettingsStore.getState().connections.linear.find((item) => item.id === issue.destinationBinding?.connectionId);
+      const display = useSettingsStore.getState().destinationProfiles.find((profile) => profile.id === issue.destinationBinding?.id);
+      setLinearFields(linearFieldsForDestination(issue.destinationBinding, connection, display?.platform === "linear" ? display : undefined));
+    }
     setSubmitOpen(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, issue?.id]);
@@ -328,6 +360,10 @@ function EditableDraftDetailDialog({
 
   function handlePlatformChange(p: PlatformId) {
     setPlatform(p);
+    if (destinationBinding && destinationBinding.platform !== p) {
+      setDestinationBinding(null);
+      if (issue) patchIssue(issue.id, { destinationBinding: undefined });
+    }
     // Slack 보존 이슈는 platform="slack"을 유지해야 PlatformChip·permalink·canPromoteSlack이
     // 일치한다. 승격 탭 전환을 영속화하면 미제출 닫기 시 platform만 트래커로 바뀌어 불일치.
     // (실제 승격은 markSubmitted→stripSubmitted가 platform을 올바르게 세팅) — 일반 draft만 영속화.
@@ -542,10 +578,13 @@ function EditableDraftDetailDialog({
     captureFiles: CaptureFiles,
   ): Promise<NormalizedSubmitResult> {
     if (!issue) throw new Error(t("create.requiredMissing"));
-    if (!ghAccount) {
-      throw new Error(t("platform.notConnected.title", { platform: t("platform.tab.github") }));
+    const binding = destinationBinding;
+    if (!binding || binding.platform !== "github" || binding.owner !== ghFields.owner || binding.repo !== ghFields.repo) {
+      throw new Error(t("destination.choose"));
     }
-    if (!ghFields.owner || !ghFields.repo) throw new Error(t("create.requiredMissing"));
+    if (!resolveDestinationBinding(binding, useSettingsStore.getState().connections).ok) {
+      throw new Error(t("destination.connectionMissing"));
+    }
 
     const ghInline = submissionInlineImages;
     const result = await submitToGithub(
@@ -556,6 +595,7 @@ function EditableDraftDetailDialog({
         fields: ghFields,
         owner: ghFields.owner,
         repo: ghFields.repo,
+        connectionId: binding.connectionId,
         // 승격은 markSubmitted가 Slack 원본을 파괴하므로 미디어 업로드 실패 시 등록 전 중단.
         requireMediaUpload: isSlackPreserved(issue),
       }), submissionProgress, submissionFiles),
@@ -568,7 +608,7 @@ function EditableDraftDetailDialog({
       githubRepo: ghFields.repo,
       githubLabels: ghFields.label ? [ghFields.label] : undefined,
     });
-    useSettingsStore.getState().setLastSubmitFields("github", githubLastSubmitFields(ghFields));
+    useSettingsStore.getState().setConnectionLastSubmitFields("github", binding.connectionId, githubLastSubmitFields(ghFields));
     useSettingsStore.getState().setLastSubmittedPlatform("github");
     return result;
   }
@@ -578,10 +618,13 @@ function EditableDraftDetailDialog({
     captureFiles: CaptureFiles,
   ): Promise<NormalizedSubmitResult> {
     if (!issue) throw new Error(t("create.requiredMissing"));
-    if (!linearAccount) {
-      throw new Error(t("platform.notConnected.title", { platform: t("platform.tab.linear") }));
+    const binding = destinationBinding;
+    if (!binding || binding.platform !== "linear" || binding.teamId !== linearFields.teamId || binding.projectId !== linearFields.projectId) {
+      throw new Error(t("destination.choose"));
     }
-    if (!linearFields.teamId) throw new Error(t("create.requiredMissing"));
+    if (!resolveDestinationBinding(binding, useSettingsStore.getState().connections).ok) {
+      throw new Error(t("destination.connectionMissing"));
+    }
 
     const linearInline = submissionInlineImages;
     const result = await submitToLinear(
@@ -591,6 +634,7 @@ function EditableDraftDetailDialog({
         captureFiles,
         fields: linearFields,
         teamId: linearFields.teamId,
+        connectionId: binding.connectionId,
       }), submissionProgress, submissionFiles),
     );
     // 승격 가드 불필요: submitToLinear는 이미지·비디오·인라인을 생성 전 업로드하고 실패 시 throw하므로
@@ -603,7 +647,7 @@ function EditableDraftDetailDialog({
       linearTeamKey: linearFields.teamKey,
       linearLabelName: linearFields.labelName,
     });
-    useSettingsStore.getState().setLastSubmitFields("linear", linearLastSubmitFields(linearFields));
+    useSettingsStore.getState().setConnectionLastSubmitFields("linear", binding.connectionId, linearLastSubmitFields(linearFields));
     useSettingsStore.getState().setLastSubmittedPlatform("linear");
     return result;
   }
@@ -820,6 +864,12 @@ function EditableDraftDetailDialog({
   }
 
   async function handleSubmit(submitPlatform: PlatformId): Promise<NormalizedSubmitResult> {
+    if (submitPlatform === "github" || submitPlatform === "linear") {
+      if (!destinationBinding || destinationBinding.platform !== submitPlatform) throw new Error(t("destination.choose"));
+      if (!resolveDestinationBinding(destinationBinding, useSettingsStore.getState().connections).ok) {
+        throw new Error(t("destination.connectionMissing"));
+      }
+    }
     // 요청이 나가 있는 동안 다른 인스턴스가 이 레코드를 지워도 병합이 드롭하지 않게 잡아둔다
     // — 드롭되면 응답 후 markSubmitted가 무음 no-op이라 티켓 key/url을 잃는다(#240).
     // 이 경로는 currentIssueId를 안 쓴다(대상이 IssueListTab의 React state다).
@@ -1064,6 +1114,9 @@ function EditableDraftDetailDialog({
         slackFields={slackFields}
         setSlackFields={setSlackFields}
         onNotionSchemaResolved={setNotionSchema}
+        destinationBinding={destinationBinding}
+        websiteOrigin={issue?.pageUrl ?? null}
+        onDestinationBindingChange={handleDestinationBindingChange}
         onSubmit={handleSubmit}
         onSuccess={(result) => {
           onOpenChange(false);

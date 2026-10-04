@@ -17,15 +17,16 @@ interface Props {
   teamId: string | undefined;
   value: CcValue[];
   onChange: (next: CcValue[]) => void;
+  connectionId?: string;
 }
 
-export function CcCombobox({ teamId, value, onChange }: Props) {
+export function CcCombobox({ teamId, value, onChange, connectionId }: Props) {
   const t = useT();
   const [open, setOpen] = useState(false);
 
   const load = useCallback(
-    () => sendBg<LinearUser[]>({ type: "linear.getMembers", teamId: teamId! }),
-    [teamId],
+    () => sendBg<LinearUser[]>({ type: "linear.getMembers", teamId: teamId!, ...(connectionId ? { connectionId } : {}) }),
+    [teamId, connectionId],
   );
   const { items, loading, error } = useLazyListOnOpen(open, !!teamId, load);
 

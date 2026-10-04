@@ -53,6 +53,27 @@ beforeEach(() => {
 });
 
 describe("submitToLinear log attachment outcomes", () => {
+  it("carries the stored connection ID through upload, create, link, and description update", async () => {
+    linearBody = "logs.html";
+    sendBg.mockImplementation(async (msg: { type: string; filename?: string }) => {
+      if (msg.type === "linear.submitIssue") return ISSUE;
+      if (msg.type === "linear.uploadFile") return { assetUrl: "https://files.example/logs" };
+      if (msg.type === "linear.createAttachment" || msg.type === "linear.updateIssueDescription") return { ok: true };
+      return undefined;
+    });
+    await submitToLinear(preparedInput({
+      ctx: makeCtx(), teamId: "T", connectionId: "linear-draft",
+      logs: [{ filename: "logs.html", dataUrl: "data:LOGS" }],
+    }));
+    const messages = sendBg.mock.calls.map(([msg]) => msg as { type: string; connectionId?: string });
+    expect(messages.map((msg) => msg.type)).toEqual([
+      "linear.submitIssue",
+      "linear.uploadFile",
+      "linear.createAttachment",
+      "linear.updateIssueDescription",
+    ]);
+    expect(messages.every((msg) => msg.connectionId === "linear-draft")).toBe(true);
+  });
   it("logs.html 업로드 실패 시 logs 파일 실패 결과 (이슈는 생성)", async () => {
     sendBg.mockImplementation(async (msg: { type: string; filename?: string }) => {
       if (msg.type === "linear.submitIssue") return ISSUE;

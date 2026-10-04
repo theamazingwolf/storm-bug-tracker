@@ -70,6 +70,7 @@ export function snapshotFromState(): EditorSnapshot {
     captureMode: s.captureMode,
     phase: s.phase,
     targetPlatform: s.targetPlatform,
+    destinationBinding: s.destinationBinding,
     target: s.target,
     selection: s.selection,
     shotSelector: s.shotSelector,

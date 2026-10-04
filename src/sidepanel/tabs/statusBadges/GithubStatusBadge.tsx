@@ -26,6 +26,7 @@ export function GithubStatusBadge({
   owner,
   repo,
   number,
+  connectionId,
   onStatusChanged,
 }: {
   ghStatus: GithubBadgeStatus;
@@ -33,6 +34,7 @@ export function GithubStatusBadge({
   owner: string;
   repo: string;
   number: number;
+  connectionId?: string;
   onStatusChanged: (s: GithubBadgeStatus) => void;
 }) {
   const t = useT();
@@ -59,6 +61,7 @@ export function GithubStatusBadge({
     sendBg<GithubIssueStatus>({
       type: "github.updateIssueState",
       owner, repo, number, state,
+      ...(connectionId ? { connectionId } : {}),
       ...(stateReason ? { stateReason } : {}),
     })
       .then((res) => {

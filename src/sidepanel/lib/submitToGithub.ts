@@ -22,6 +22,7 @@ export interface GithubSubmitInput extends SubmissionAdapterInput {
   inlineImages?: InlineImageInput[];
   owner: string;
   repo: string;
+  connectionId?: string;
   label?: string;
   assignee?: string;
   cc?: string[];
@@ -37,6 +38,7 @@ export async function submitToGithub(
     async (files) => {
       const results = await sendBg<UploadFileResult[]>({
         type: "github.uploadFiles",
+        ...(input.connectionId ? { connectionId: input.connectionId } : {}),
         owner: input.owner,
         repo: input.repo,
         files,
@@ -61,6 +63,7 @@ export async function submitToGithub(
 
   const result = await submitCreation(input.progress, () => sendBg<GithubCreateIssueResult>({
     type: "github.submitIssue",
+    ...(input.connectionId ? { connectionId: input.connectionId } : {}),
     payload: {
       owner: input.owner,
       repo: input.repo,

@@ -5,6 +5,7 @@ import type { NetworkLog } from "@/types/network";
 import type { ConsoleLog } from "@/types/console";
 import type { ActionLog } from "@/types/action";
 import type { PlatformId } from "@/types/platform";
+import type { DestinationProfile } from "@/types/connection";
 import type { EnvironmentRow } from "@/types/environment";
 import type { AttachmentResult, UserAttachmentMeta } from "@/types/attachment";
 import { onBlobSaveFailed } from "@/lib/app-events";
@@ -148,6 +149,7 @@ export interface EditorState {
   recordingSource: RecordingSource;
   phase: EditorPhase;
   targetPlatform: PlatformId;
+  destinationBinding: DestinationProfile | null;
   target: EditorTarget | null;
   // 바인딩 탭의 현재 URL. target.url은 세션 원점(캡처를 찍은 페이지)이라 갱신하지 않는다
   // — pageKey 비교와 API Hosts 파생이 그 값을 물고 있다. 비영속: 훅이 마운트 즉시
@@ -305,6 +307,7 @@ export interface EditorState {
   addAttachments: (files: File[]) => Promise<TakeWithinLimitsResult>;
   removeAttachment: (id: string) => void;
   setTargetPlatform: (platform: PlatformId) => void;
+  setDestinationBinding: (binding: DestinationProfile | null) => void;
   setLivePageUrl: (url: string | null) => void;
   onSubmitted: (result: SubmitResult) => void;
   reset: () => void;
@@ -318,6 +321,7 @@ export const EDITOR_SNAPSHOT_KEYS = [
   "captureMode",
   "phase",
   "targetPlatform",
+  "destinationBinding",
   "target",
   "selection",
   "shotSelector",
@@ -372,6 +376,7 @@ const initial = {
   recordingSource: "tab" as RecordingSource,
   phase: "idle" as EditorPhase,
   targetPlatform: "jira" as PlatformId,
+  destinationBinding: null as DestinationProfile | null,
   target: null,
   selection: null,
   shotSelector: null as ShotSelector | null,
@@ -488,6 +493,19 @@ export function mergeSelectionStyles(
     restore(propSources, prev.propSources, prop);
   }
   return { specifiedStyles, computedStyles, propSources };
+}
+
+function copyDestinationBinding(binding: DestinationProfile): DestinationProfile {
+  return binding.platform === "github"
+    ? { id: binding.id, platform: "github", connectionId: binding.connectionId, owner: binding.owner, repo: binding.repo }
+    : {
+        id: binding.id,
+        platform: "linear",
+        connectionId: binding.connectionId,
+        organizationId: binding.organizationId,
+        teamId: binding.teamId,
+        ...(binding.projectId ? { projectId: binding.projectId } : {}),
+      };
 }
 
 function newId(prefix: string): string {
@@ -919,6 +937,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       });
     }
     const id = state.currentIssueId ?? newId("issue");
+    const priorBinding = state.currentIssueId
+      ? useIssuesStore.getState().issues?.find((issue) => issue.id === id)?.destinationBinding
+      : undefined;
     // 4분기 공통 필드. saveDraft가 병합이라 키를 조건부로 빼면 직전 세션 값이 되살아나므로
     // 분기는 고유 필드만 스프레드로 얹는다 — 빼는 게 아니라 덮는 방향으로만 갈린다.
     // 반환 타입을 박아두는 건 스프레드가 saveDraft 호출부의 excess property 검사를 지나치기
@@ -928,6 +949,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       | "id"
       | "status"
       | "platform"
+      | "destinationBinding"
       | "title"
       | "createdAt"
       | "updatedAt"
@@ -939,6 +961,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       id,
       status: "draft",
       platform: state.targetPlatform,
+      ...(state.destinationBinding
+        ? { destinationBinding: copyDestinationBinding(state.destinationBinding) }
+        : priorBinding ? { destinationBinding: undefined } : {}),
       title: draft.title,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -1212,7 +1237,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (tabId != null) deleteAttachmentBlob(pendingKey(tabId), id).catch(() => {});
     if (issueId) deleteAttachmentBlob(issueId, id).catch(() => {});
   },
-  setTargetPlatform: (platform) => set({ targetPlatform: platform }),
+  setTargetPlatform: (platform) => set((state) => ({
+    targetPlatform: platform,
+    ...(state.targetPlatform !== platform ? { destinationBinding: null } : {}),
+  })),
+  setDestinationBinding: (binding) => set({
+    targetPlatform: binding?.platform ?? get().targetPlatform,
+    destinationBinding: binding ? copyDestinationBinding(binding) : null,
+  }),
 
   // 값이 실제로 바뀔 때만 notify한다 — 한 네비게이션이 onUpdated를 여러 번 발화시키므로
   // 무조건 set하면 같은 URL로 세션 스냅샷 저장이 반복 예약된다.

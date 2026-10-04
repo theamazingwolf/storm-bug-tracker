@@ -22,7 +22,7 @@ describe("website origin routing", () => {
   it("reports ambiguous conflicting mappings and unmatched exact origins", () => {
     expect(matchWebsiteOrigin("https://a.example", [
       { origin: "https://a.example", destinationId: github.id },
-      { origin: "https://a.example", destinationId: linear.id },
+      { origin: "https://a.example/", destinationId: linear.id },
     ], [github, linear])).toMatchObject({ status: "ambiguous", destinations: [github, linear] });
     expect(matchWebsiteOrigin("https://elsewhere.example", rules("https://a.example"), [github])).toEqual({ status: "unmatched" });
   });
@@ -32,7 +32,7 @@ describe("website origin routing", () => {
       expect(matchWebsiteOrigin(input, rules("https://example.com"), [github]).status, input).toBe("unsupported");
     }
     expect(matchWebsiteOrigin("https://example.com/path?x=1#frag", rules("https://example.com"), [github])).toEqual({ status: "matched", destination: github });
-    expect(matchWebsiteOrigin("https://notexample.com", rules("https://example.com"), [github])).toEqual({ status: "unmatched"});
+    expect(matchWebsiteOrigin("https://notexample.com", rules("https://example.com"), [github])).toEqual({ status: "unmatched" });
     expect(matchWebsiteOrigin("https://example.com", rules("https://example.com/path", "https://example.com?x=1", "https://example.com#frag"), [github])).toEqual({ status: "unmatched" });
   });
 

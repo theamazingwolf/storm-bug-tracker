@@ -3,6 +3,7 @@ import { sendBg } from "@/lib/bg-client";
 import type { AttachmentCheckpoint, AttachmentCheckpointPatch, AttachmentResult, AttachmentRetryReason, RetryPlatform, SubmissionRecoveryMeta } from "@/types/attachment";
 import { blobToDataUrl, checkpointAttachmentRetry, checkpointSubmission, readRecoveryFile, readSubmissionRecovery } from "@/store/blob-db";
 import { IssueAlreadySubmittedError, isIssueSubmitting, withIssueOperationLock } from "@/store/issues-store";
+import { useSettingsStore } from "@/store/settings-store";
 import { mergeCheckpoint, retrySnapshotBlocker } from "./attachmentCheckpoints";
 import { RETRY_ADAPTERS, RetryStop, fileFinished, planFileStage, type RetryContext, type RetryFileState, type RetryStage } from "./retryAttachmentAdapters";
 import { completeRecoveredSubmission, notifyRecoveryChange } from "./submissionRecovery";
@@ -166,8 +167,23 @@ async function run(issueId: string, onProgress?: (event: RetryProgressEvent) => 
 }
 
 async function checkIdentity(meta: RetryMeta): Promise<AttachmentRetryReason | null> {
+  let connectionId = meta.connectionId;
+  if (meta.platform === "github" || meta.platform === "linear") {
+    const records = useSettingsStore.getState().connections[meta.platform];
+    if (connectionId) {
+      if (!records.some((record) => record.id === connectionId)) return "account-unverified";
+    } else {
+      // Legacy no-ID retry is safe only when a single credential record exists.
+      if (records.length !== 1) return "account-unverified";
+      connectionId = records[0].id;
+    }
+  }
   try {
-    const result = await sendBg<{ identity?: unknown }>({ type: `${meta.platform as RetryPlatform}.getAccountIdentity`, destination: meta.destination });
+    const result = await sendBg<{ identity?: unknown }>({
+      type: `${meta.platform as RetryPlatform}.getAccountIdentity`,
+      destination: meta.destination,
+      ...(connectionId ? { connectionId } : {}),
+    });
     return result?.identity === meta.retry.accountIdentity ? null : "account-changed";
   } catch (error) {
     // Only a lookup that answered with another account is a change; a failed lookup is unknown.

@@ -21,6 +21,10 @@ import {
   useSettingsStore,
 } from "@/store/settings-store";
 import type { PlatformId } from "@/types/platform";
+import type { DestinationProfile } from "@/types/connection";
+import { matchWebsiteOrigin } from "@/lib/site-destination-routing";
+import { cloneDestinationBinding, resolveDestinationBinding } from "@/sidepanel/lib/destinationBinding";
+import { githubFieldsForDestination, linearFieldsForDestination } from "@/sidepanel/lib/boundDestinationFields";
 import { buildCaptureFiles, type CaptureFiles } from "@/sidepanel/lib/buildCaptureFiles";
 import { buildEditorMarkdownContext, buildEditorLogsCaptureInput } from "@/sidepanel/lib/buildEditorCapture";
 import { type MarkdownContext } from "@/sidepanel/lib/buildIssueMarkdown";
@@ -72,27 +76,97 @@ export function IssueCreateModal() {
   const lastAsanaSubmit = useSettingsStore((s) => s.lastSubmitFields.asana);
   const lastClickupSubmit = useSettingsStore((s) => s.lastSubmitFields.clickup);
   const lastSlackSubmit = useSettingsStore((s) => s.lastSubmitFields.slack);
+  const destinationProfiles = useSettingsStore((s) => s.destinationProfiles);
+  const websiteOriginMappings = useSettingsStore((s) => s.websiteOriginMappings);
+  const destinationBinding = useEditorStore((s) => s.destinationBinding);
+  const setDestinationBinding = useEditorStore((s) => s.setDestinationBinding);
   const setTargetPlatform = useEditorStore((s) => s.setTargetPlatform);
+  const target = useEditorStore((s) => s.target);
+  const currentIssueId = useEditorStore((s) => s.currentIssueId);
 
-  const available = useMemo(() => connectedPlatforms(accounts), [accounts]);
+  const available = useMemo(
+    () => Array.from(new Set([...connectedPlatforms(accounts), ...destinationProfiles.map((profile) => profile.platform)])),
+    [accounts, destinationProfiles],
+  );
   const initialPlatform = useMemo(
     () => pickInitialPlatform(accounts, lastSubmittedPlatform),
     [accounts, lastSubmittedPlatform],
   );
   const [platform, setPlatform] = useState<PlatformId>(initialPlatform ?? "jira");
 
-  // 다이얼로그가 열릴 때마다 default platform 재계산
   useEffect(() => {
-    if (open && initialPlatform) {
+    if (!open) return;
+    const saved = currentIssueId
+      ? useIssuesStore.getState().issues.find((issue) => issue.id === currentIssueId)?.destinationBinding
+      : null;
+    if (saved) {
+      setDestinationBinding(saved);
+      setPlatform(saved.platform);
+      setTargetPlatform(saved.platform);
+      if (saved.platform === "github") {
+        const connection = useSettingsStore.getState().connections.github.find((item) => item.id === saved.connectionId);
+        setGhFields(githubFieldsForDestination(saved, connection));
+      } else {
+        const connection = useSettingsStore.getState().connections.linear.find((item) => item.id === saved.connectionId);
+        const display = destinationProfiles.find((profile) => profile.id === saved.id);
+        setLinearFields(linearFieldsForDestination(saved, connection, display?.platform === "linear" ? display : undefined));
+      }
+      return;
+    }
+    const match = target?.url
+      ? matchWebsiteOrigin(target.url, websiteOriginMappings, destinationProfiles)
+      : { status: "unsupported" as const };
+    if (match.status === "matched") {
+      setDestinationBinding(match.destination);
+      setPlatform(match.destination.platform);
+      setTargetPlatform(match.destination.platform);
+      if (match.destination.platform === "github") {
+        const connection = useSettingsStore.getState().connections.github.find((item) => item.id === match.destination.connectionId);
+        setGhFields(githubFieldsForDestination(match.destination, connection));
+      } else {
+        const connection = useSettingsStore.getState().connections.linear.find((item) => item.id === match.destination.connectionId);
+        setLinearFields(linearFieldsForDestination(match.destination, connection, match.destination));
+      }
+      if (currentIssueId) {
+        useIssuesStore.getState().patchIssue(currentIssueId, {
+          platform: match.destination.platform,
+          destinationBinding: cloneDestinationBinding(match.destination),
+        });
+      }
+      return;
+    }
+    setDestinationBinding(null);
+    if (initialPlatform) {
       setPlatform(initialPlatform);
       setTargetPlatform(initialPlatform);
     }
-  }, [open, initialPlatform, setTargetPlatform]);
+  }, [open, currentIssueId]);
+
+  function handleDestinationBindingChange(binding: DestinationProfile | null) {
+    setDestinationBinding(binding);
+    if (!binding) {
+      if (currentIssueId) patchIssue(currentIssueId, { destinationBinding: undefined });
+      return;
+    }
+    setPlatform(binding.platform);
+    setTargetPlatform(binding.platform);
+    if (binding.platform === "github") {
+      const connection = useSettingsStore.getState().connections.github.find((item) => item.id === binding.connectionId);
+      setGhFields(githubFieldsForDestination(binding, connection));
+    } else {
+      const connection = useSettingsStore.getState().connections.linear.find((item) => item.id === binding.connectionId);
+      setLinearFields(linearFieldsForDestination(binding, connection, binding));
+    }
+    if (currentIssueId) patchIssue(currentIssueId, { platform: binding.platform, destinationBinding: cloneDestinationBinding(binding) });
+  }
 
   function handlePlatformChange(p: PlatformId) {
     setPlatform(p);
     setTargetPlatform(p);
-    if (currentIssueId) patchIssue(currentIssueId, { platform: p });
+    if (currentIssueId) patchIssue(currentIssueId, {
+      platform: p,
+      ...(destinationBinding?.platform !== p ? { destinationBinding: undefined } : {}),
+    });
   }
 
   const ghAccount = accounts.github;
@@ -148,7 +222,6 @@ export function IssueCreateModal() {
   const attachments = useEditorStore((s) => s.attachments);
   const attachmentsEnabled = useSettingsUiStore((s) => s.attachmentsEnabled);
 
-  const currentIssueId = useEditorStore((s) => s.currentIssueId);
   let submissionPatch: Partial<IssueRecord> = {};
   let submissionProgress: SubmissionProgress;
   let submissionFiles: SubmissionFile[] = [];
@@ -240,10 +313,13 @@ export function IssueCreateModal() {
     inlineImages: InlineImageInput[],
     captureFiles: CaptureFiles,
   ): Promise<NormalizedSubmitResult> {
-    if (!ghAccount) {
-      throw new Error(t("platform.notConnected.title", { platform: t("platform.tab.github") }));
+    const binding = destinationBinding;
+    if (!binding || binding.platform !== "github" || binding.owner !== ghFields.owner || binding.repo !== ghFields.repo) {
+      throw new Error(t("destination.choose"));
     }
-    if (!ghFields.owner || !ghFields.repo) throw new Error(t("create.requiredMissing"));
+    const resolved = resolveDestinationBinding(binding, useSettingsStore.getState().connections);
+    if (!resolved.ok) throw new Error(t("destination.connectionMissing"));
+    if (!resolved.connection.account) throw new Error(t("destination.connectionMissing"));
 
     const result = await submitToGithub(
       withSubmissionProgress(githubSubmitArgs({
@@ -253,6 +329,7 @@ export function IssueCreateModal() {
         fields: ghFields,
         owner: ghFields.owner,
         repo: ghFields.repo,
+        connectionId: binding.connectionId,
       }), submissionProgress, submissionFiles),
     );
     if (currentIssueId) {
@@ -265,7 +342,7 @@ export function IssueCreateModal() {
         githubLabels: ghFields.label ? [ghFields.label] : undefined,
       });
     }
-    useSettingsStore.getState().setLastSubmitFields("github", githubLastSubmitFields(ghFields));
+    useSettingsStore.getState().setConnectionLastSubmitFields("github", binding.connectionId, githubLastSubmitFields(ghFields));
     useSettingsStore.getState().setLastSubmittedPlatform("github");
     return result;
   }
@@ -275,10 +352,13 @@ export function IssueCreateModal() {
     inlineImages: InlineImageInput[],
     captureFiles: CaptureFiles,
   ): Promise<NormalizedSubmitResult> {
-    if (!linearAccount) {
-      throw new Error(t("platform.notConnected.title", { platform: t("platform.tab.linear") }));
+    const binding = destinationBinding;
+    if (!binding || binding.platform !== "linear" || binding.teamId !== linearFields.teamId || binding.projectId !== linearFields.projectId) {
+      throw new Error(t("destination.choose"));
     }
-    if (!linearFields.teamId) throw new Error(t("create.requiredMissing"));
+    const resolved = resolveDestinationBinding(binding, useSettingsStore.getState().connections);
+    if (!resolved.ok) throw new Error(t("destination.connectionMissing"));
+    if (!resolved.connection.account) throw new Error(t("destination.connectionMissing"));
 
     const result = await submitToLinear(
       withSubmissionProgress(linearSubmitArgs({
@@ -287,6 +367,7 @@ export function IssueCreateModal() {
         captureFiles,
         fields: linearFields,
         teamId: linearFields.teamId,
+        connectionId: binding.connectionId,
       }), submissionProgress, submissionFiles),
     );
     if (currentIssueId) {
@@ -299,7 +380,7 @@ export function IssueCreateModal() {
         linearLabelName: linearFields.labelName,
       });
     }
-    useSettingsStore.getState().setLastSubmitFields("linear", linearLastSubmitFields(linearFields));
+    useSettingsStore.getState().setConnectionLastSubmitFields("linear", binding.connectionId, linearLastSubmitFields(linearFields));
     useSettingsStore.getState().setLastSubmittedPlatform("linear");
     return result;
   }
@@ -512,6 +593,13 @@ export function IssueCreateModal() {
   }
 
   async function handleSubmit(submitPlatform: PlatformId): Promise<NormalizedSubmitResult> {
+    if (submitPlatform === "github" || submitPlatform === "linear") {
+      const binding = destinationBinding;
+      if (!binding || binding.platform !== submitPlatform) throw new Error(t("destination.choose"));
+      if (!resolveDestinationBinding(binding, useSettingsStore.getState().connections).ok) {
+        throw new Error(t("destination.connectionMissing"));
+      }
+    }
     const ctx = buildCtx();
     // 가드가 pageUrl 정정보다 **앞**이어야 한다 — 차단되는 경우는 정의상 레코드가 이미
     // submitted이고, patchIssue는 스프레드 뒤에 updatedAt을 올리므로 그 write가 병합의 최신
@@ -615,6 +703,9 @@ export function IssueCreateModal() {
         slackFields={slackFields}
         setSlackFields={setSlackFields}
         onNotionSchemaResolved={setNotionSchema}
+        destinationBinding={destinationBinding}
+        websiteOrigin={target?.url ?? null}
+        onDestinationBindingChange={handleDestinationBindingChange}
         onSubmit={handleSubmit}
       />
     </>

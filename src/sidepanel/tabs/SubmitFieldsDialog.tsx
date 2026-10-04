@@ -23,6 +23,8 @@ import {
 } from "@/store/settings-store";
 import { type PlatformId, type NormalizedSubmitResult } from "@/types/platform";
 import type { NotionDatabaseSchema } from "@/types/notion";
+import type { DestinationProfile, RoutablePlatform } from "@/types/connection";
+import { DestinationPicker } from "./DestinationPicker";
 import {
   GithubIssueFields,
   type GithubIssueFieldsValue,
@@ -84,6 +86,9 @@ export interface SubmitFieldsDialogProps {
   slackFields: SlackIssueFieldsValue;
   setSlackFields: (patch: Partial<SlackIssueFieldsValue>) => void;
   onNotionSchemaResolved: (schema: NotionDatabaseSchema | null) => void;
+  destinationBinding?: DestinationProfile | null;
+  websiteOrigin?: string | null;
+  onDestinationBindingChange?: (binding: DestinationProfile | null) => void;
   onSubmit: (platform: PlatformId) => Promise<NormalizedSubmitResult>;
   onSuccess?: (result: NormalizedSubmitResult) => void;
 }
@@ -114,6 +119,9 @@ export function SubmitFieldsDialog(props: SubmitFieldsDialogProps) {
     slackFields,
     setSlackFields,
     onNotionSchemaResolved,
+    destinationBinding,
+    websiteOrigin,
+    onDestinationBindingChange,
     onSubmit,
     onSuccess,
   } = props;
@@ -283,17 +291,26 @@ export function SubmitFieldsDialog(props: SubmitFieldsDialogProps) {
         ) : null}
 
         <div className="-m-1 min-h-0 flex-1 overflow-y-auto overscroll-contain p-1">
+        {(platform === "github" || platform === "linear") && onDestinationBindingChange ? (
+          <DestinationPicker
+            platform={platform as RoutablePlatform}
+            origin={websiteOrigin ?? null}
+            value={destinationBinding ?? null}
+            onChange={onDestinationBindingChange}
+            disabled={submit.status === "submitting"}
+          />
+        ) : null}
         {platform === "jira" ? (
           jiraConfigured ? (
             <JiraIssueFields fields={jiraFields} onChange={setJiraFields} />
           ) : null
         ) : platform === "github" ? (
           ghConfigured ? (
-            <GithubIssueFields value={ghFields} onChange={setGhFields} />
+            <GithubIssueFields value={ghFields} onChange={setGhFields} connectionId={destinationBinding?.platform === "github" ? destinationBinding.connectionId : undefined} />
           ) : null
         ) : platform === "linear" ? (
           linearConfigured ? (
-            <LinearIssueFields value={linearFields} onChange={setLinearFields} />
+            <LinearIssueFields value={linearFields} onChange={setLinearFields} connectionId={destinationBinding?.platform === "linear" ? destinationBinding.connectionId : undefined} />
           ) : null
         ) : platform === "gitlab" ? (
           gitlabConfigured ? (
