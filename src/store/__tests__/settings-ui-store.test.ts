@@ -339,6 +339,22 @@ describe("settings-ui-store", () => {
       expect(useSettingsUiStore.getState().llm).toEqual(config);
     });
 
+    it("이미지 확인은 같은 endpoint/model 쌍에만 저장된다", () => {
+      const confirmed: LlmConfig = {
+        baseUrl: "https://llm.example/v1",
+        apiKey: "test",
+        modelId: "vision",
+        imageCapability: { baseUrl: "https://llm.example/v1", modelId: "vision" },
+      };
+      useSettingsUiStore.getState().setLlm(confirmed);
+      expect(useSettingsUiStore.getState().llm?.imageCapability).toEqual(confirmed.imageCapability);
+      const migrated = migrateSettingsUi({ llm: {
+        ...confirmed,
+        modelId: "text-only",
+      } }, 11);
+      expect(migrated.llm?.imageCapability).toBeUndefined();
+    });
+
     it("setLlm(null)로 LLM 설정 초기화", () => {
       useSettingsUiStore.getState().setLlm({
         baseUrl: "https://api.openai.com/v1",

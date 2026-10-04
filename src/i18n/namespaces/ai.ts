@@ -3,7 +3,8 @@ const ko = {
   "ai.stop": "중단",
 
   "aiDraft.title": "AI 초안 작성",
-  "aiDraft.placeholder": "버그를 간단히 설명해주세요...",
+  "aiDraft.placeholder": "추가 지시사항 (선택)...",
+  "aiDraft.textOnlyNotice": "캡처 이미지는 전송하지 않습니다. 텍스트와 로그 컨텍스트만 사용합니다.",
   "aiDraft.generate": "초안 작성",
   "aiDraft.disclaimer": "AI는 실수할 수 있습니다. 생성된 초안을 확인해주세요.",
   "aiDraft.contextTrimmed": "내용이 많아 일부 참고 정보를 빼고 작성했습니다.",
@@ -40,7 +41,8 @@ const en = {
   "ai.stop": "Stop",
 
   "aiDraft.title": "AI Draft",
-  "aiDraft.placeholder": "Briefly describe the bug...",
+  "aiDraft.placeholder": "Optional instruction...",
+  "aiDraft.textOnlyNotice": "The captured image will not be sent. Only text and log context are used.",
   "aiDraft.generate": "Generate",
   "aiDraft.disclaimer": "AI can make mistakes. Please review the generated draft.",
   "aiDraft.contextTrimmed": "There was a lot to cover, so some context was left out.",
@@ -75,7 +77,8 @@ const fr = {
   "ai.stop": "Arrêter",
 
   "aiDraft.title": "Brouillon IA",
-  "aiDraft.placeholder": "Décrivez brièvement le bug...",
+  "aiDraft.placeholder": "Instruction facultative...",
+  "aiDraft.textOnlyNotice": "L’image capturée ne sera pas envoyée. Seuls le texte et les logs seront utilisés.",
   "aiDraft.generate": "Générer",
   "aiDraft.disclaimer": "L’IA peut faire des erreurs. Veuillez relire le brouillon généré.",
   "aiDraft.contextTrimmed": "Le contenu était volumineux, une partie du contexte a été omise.",

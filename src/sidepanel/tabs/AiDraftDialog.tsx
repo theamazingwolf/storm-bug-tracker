@@ -106,9 +106,7 @@ export function AiDraftDialog({
 
   const handleSubmit = useCallback(async () => {
     const msg = input.trim();
-    if (!msg && captureMode !== "element") return;
 
-    setInput("");
     onOpenChange(false);
 
     // 중단 시 BYOK 요청·retry를 abort하고 Chrome 세션은 destroy한 뒤 결과를 폐기한다.
@@ -299,6 +297,7 @@ export function AiDraftDialog({
           sections,
           environment: prevDraft?.environment ?? [],
         });
+        setInput("");
         // 절삭·섹션 누락은 결과를 조용히 열화시킨다 — 무엇이 빠졌는지까진 아니어도
         // "온전한 컨텍스트로 쓴 초안이 아니다"는 사실은 알아야 한다.
         // 이미지 cap 초과분도 같은 고지에 얹는다 — 본문에 직접 붙인 인라인 이미지가
@@ -316,7 +315,6 @@ export function AiDraftDialog({
       }
     } catch (err) {
       if (!aiRun.isActive(run)) return; // 중단·교체 후 배경 호출 실패(또는 세션 null-deref)의 오탐 토스트 방지.
-      console.error("[AI Draft] error:", err);
       toastLlmError(err, t, "draft.aiError");
       // 에러 경로의 세션 정리는 콜사이트에 남는다 — 취소가 아니라 onDispose가 안 닿는다.
       sessionRef.current?.destroy?.();
@@ -333,7 +331,7 @@ export function AiDraftDialog({
     }
   };
 
-  const submitDisabled = captureMode !== "element" && !input.trim();
+  const submitDisabled = false;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -356,6 +354,11 @@ export function AiDraftDialog({
           <p className="mt-1.5 text-center text-xs text-muted-foreground/60">
             {t("aiDraft.disclaimer")}
           </p>
+          {captureMode === "screenshot" && !capabilities.supportsImages && (
+            <p className="mt-1 text-center text-xs text-muted-foreground">
+              {t("aiDraft.textOnlyNotice")}
+            </p>
+          )}
         </div>
 
         <DialogFooter className="!flex-row items-center !justify-end gap-2">

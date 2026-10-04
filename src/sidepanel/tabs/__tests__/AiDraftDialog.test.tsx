@@ -61,6 +61,19 @@ function renderDialog(createSession: () => Promise<AISession>) {
 
 describe("AiDraftDialog 취소 레인", () => {
   // 대조군 — 이게 없으면 아래 "적용 안 됨" 단언이 공허해진다(POSTMORTEM 2026-07-28).
+  it("캡처 컨텍스트만으로 생성할 수 있어 지시는 선택 사항이다", async () => {
+    const { session, calls, pending } = makeSession();
+    renderDialog(vi.fn(async () => session));
+
+    const submitButton = screen.getByTestId("ai-draft-submit");
+    expect((submitButton as HTMLButtonElement).disabled).toBe(false);
+    await userEvent.setup().click(submitButton);
+    await waitFor(() => expect(calls.length).toBe(1));
+    expect(calls[0].input).toBe("");
+    pending[0].resolve(VALID_RESPONSE);
+    await waitFor(() => expect(useEditorStore.getState().draft?.title).toBe("AI title"));
+  });
+
   it("취소하지 않으면 응답이 draft에 적용된다", async () => {
     const { session, calls, pending } = makeSession();
     renderDialog(vi.fn(async () => session));
@@ -74,8 +87,29 @@ describe("AiDraftDialog 취소 레인", () => {
     );
   });
 
-  it("중단하면 prompt에 넘긴 signal이 abort되고 본문이 안 바뀌며 에러 토스트도 없다", async () => {
+  it("실패하면 기존 제목·본문·캡처 evidence를 보존하고 오류 안내를 낸다", async () => {
+    const { session } = makeSession();
+    useEditorStore.setState({
+      draft: { title: "kept title", sections: { description: "kept body" }, environment: [] },
+      screenshotRaw: "data:image/png;base64,capture",
+    });
+    const runSession = { ...session, prompt: vi.fn(() => Promise.reject(new Error("safe failure"))) } as unknown as AISession;
+    renderDialog(vi.fn(async () => runSession));
+
+    await submit("add detail");
+    await waitFor(() => expect(toastLlmError).toHaveBeenCalled());
+    expect(useEditorStore.getState().draft).toEqual({
+      title: "kept title", sections: { description: "kept body" }, environment: [],
+    });
+    expect(useEditorStore.getState().screenshotRaw).toBe("data:image/png;base64,capture");
+  });
+
+  it("중단하면 prompt signal을 abort하고 기존 draft·evidence를 보존하며 오류 토스트를 내지 않는다", async () => {
     const { session, calls, pending } = makeSession();
+    useEditorStore.setState({
+      draft: { title: "kept title", sections: { description: "kept body" }, environment: [] },
+      screenshotRaw: "data:image/png;base64,capture",
+    });
     renderDialog(vi.fn(async () => session));
 
     await submit("write it");
@@ -90,7 +124,10 @@ describe("AiDraftDialog 취소 레인", () => {
     await waitFor(() =>
       expect(useEditorStore.getState().aiDraftLoading).toBe(false),
     );
-    expect(useEditorStore.getState().draft?.title).toBe("");
+    expect(useEditorStore.getState().draft).toEqual({
+      title: "kept title", sections: { description: "kept body" }, environment: [],
+    });
+    expect(useEditorStore.getState().screenshotRaw).toBe("data:image/png;base64,capture");
     expect(toastLlmError).not.toHaveBeenCalled();
   });
 

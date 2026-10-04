@@ -104,6 +104,22 @@ export interface LlmConfig {
   baseUrl: string;
   apiKey: string;
   modelId: string;
+  imageCapability?: { baseUrl: string; modelId: string };
+}
+
+function normalizeLlmImageCapability(llm: LlmConfig | null | undefined): LlmConfig | null | undefined {
+  if (!llm) return llm;
+  const confirmation = llm.imageCapability;
+  if (
+    !confirmation ||
+    typeof confirmation.baseUrl !== "string" ||
+    typeof confirmation.modelId !== "string" ||
+    confirmation.baseUrl !== llm.baseUrl ||
+    confirmation.modelId !== llm.modelId
+  ) {
+    return { ...llm, imageCapability: undefined };
+  }
+  return llm;
 }
 
 function browserLanguage(): string | undefined {
@@ -166,6 +182,7 @@ export function migrateSettingsUi(
   // 로케일은 v1부터 있던 필드라 version 분기가 없다. 정규화가 막는 건 다운그레이드다 —
   // 새 로케일을 쓰던 persist가 구버전으로 롤백되면 사전 조회가 undefined가 된다.
   state.locale = normalizeLocale(state.locale);
+  state.llm = normalizeLlmImageCapability(state.llm) ?? null;
   // v9: 순서 배열에 미디어 엔트리 편입(레거시 앵커 위치로 backfill → 레이아웃 불변)
   state.issueSections = normalizeSections(state.issueSections ?? DEFAULT_ISSUE_SECTIONS);
   return state as SettingsUiState;
@@ -181,6 +198,7 @@ export function mergePersistedSettings(
   return {
     ...current,
     ...p,
+    llm: normalizeLlmImageCapability(p.llm === undefined ? current.llm : p.llm) ?? null,
     // 저장된 값이 없으면 detectLocale이 정한 현재 값을 유지한다(없는 걸 덮어쓰지 않는다).
     locale: p.locale === undefined ? current.locale : normalizeLocale(p.locale),
     issueSections: normalizeSections(p.issueSections ?? current.issueSections),

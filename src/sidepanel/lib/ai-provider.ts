@@ -64,6 +64,11 @@ export interface ProviderCapabilities {
   readonly contextBudgetChars: number;
 }
 
+export interface ImageCapabilityConfirmation {
+  readonly baseUrl: string;
+  readonly modelId: string;
+}
+
 export const NANO_CAPABILITIES: ProviderCapabilities = {
   promptStyle: "compact",
   supportsImages: false,
@@ -101,8 +106,20 @@ function isLocalEndpoint(baseUrl: string): boolean {
   }
 }
 
-export function byokCapabilities(baseUrl: string): ProviderCapabilities {
-  return isLocalEndpoint(baseUrl) ? LOCAL_BYOK_CAPABILITIES : BYOK_CAPABILITIES;
+export function byokCapabilities(
+  baseUrl: string,
+  modelId = "",
+  imageConfirmation?: ImageCapabilityConfirmation,
+): ProviderCapabilities {
+  const local = isLocalEndpoint(baseUrl);
+  const base = local ? LOCAL_BYOK_CAPABILITIES : BYOK_CAPABILITIES;
+  const supportsImages = Boolean(
+    !local &&
+    imageConfirmation &&
+    imageConfirmation.baseUrl === baseUrl &&
+    imageConfirmation.modelId === modelId,
+  );
+  return { ...base, supportsImages };
 }
 
 // few-shot 1쌍. systemPrompt 문자열이 아니라 별도 채널(Chrome initialPrompts / BYOK
@@ -170,6 +187,72 @@ export class LlmAuthError extends Error {
     super("auth_failed");
     this.name = "LlmAuthError";
   }
+}
+
+export class LlmPermissionError extends Error {
+  constructor() {
+    super("permission_denied");
+    this.name = "LlmPermissionError";
+  }
+}
+
+export class LlmModelUnavailableError extends Error {
+  constructor() {
+    super("model_unavailable");
+    this.name = "LlmModelUnavailableError";
+  }
+}
+
+export class LlmUnsupportedRequestError extends Error {
+  constructor() {
+    super("unsupported_request");
+    this.name = "LlmUnsupportedRequestError";
+  }
+}
+
+export class LlmNetworkError extends Error {
+  constructor() {
+    super("network_error");
+    this.name = "LlmNetworkError";
+  }
+}
+
+export class LlmRequestError extends Error {
+  constructor() {
+    super("provider_request_failed");
+    this.name = "LlmRequestError";
+  }
+}
+
+function classifyHttpFailure(status: number, providerBody: string): Error {
+  if (status === 502 || status === 503 || status === 504 || status === 529) {
+    return new LlmOverloadedError();
+  }
+  if (status === 401) return new LlmAuthError();
+  if (status === 403) return new LlmPermissionError();
+  if (status === 429) return new LlmQuotaError();
+  if (status === 413) return new AiContextOverflowError();
+  const evidence = providerBody.toLowerCase();
+  if (status === 404 && /model.{0,40}(not found|unavailable|does not exist)/.test(evidence)) {
+    return new LlmModelUnavailableError();
+  }
+  if (
+    (status === 400 || status === 422) &&
+    /context.{0,24}(exceed|limit|too (large|long)|maximum|overflow)|(exceed|limit|too (large|long)|maximum|overflow).{0,24}context|tokens?.{0,16}(limit|too many|exceed)|too many tokens|maximum.{0,20}(tokens|length)|prompt.{0,20}(too long|too large)/.test(evidence)
+  ) {
+    return new AiContextOverflowError();
+  }
+  if (
+    (status === 400 || status === 422) &&
+    /(?:image_url|image input|vision|images?).{0,60}(unsupported|not supported|not allowed|does not support|doesn't support)|(?:unsupported|not supported|not allowed|does not support|doesn't support).{0,60}(?:image_url|image input|vision|images?)/.test(evidence)
+  ) {
+    return new LlmUnsupportedRequestError();
+  }
+  return new LlmRequestError();
+}
+
+function isNetworkFailure(error: unknown): boolean {
+  return error instanceof TypeError;
 }
 
 // 호출은 성공했으나 모델이 빈/파싱 불가 응답을 준 경우. LLM 의존 기능 공통(초안·스타일링·재현단계)
@@ -242,14 +325,20 @@ export async function fetchWithRetry(
   retryStatuses: number[],
 ): Promise<Response> {
   for (let attempt = 0; ; attempt++) {
-    const res = await fetch(url, init);
+    let res: Response;
+    try {
+      res = await fetch(url, init);
+    } catch (error) {
+      if (isNetworkFailure(error)) throw new LlmNetworkError();
+      throw error;
+    }
     if (!retryStatuses.includes(res.status) || attempt >= RETRY_DELAYS_MS.length) {
       return res;
     }
     const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
     const wait = retryAfterMs ?? RETRY_DELAYS_MS[attempt];
     console.warn(
-      `[ai-provider] ${res.status} from ${url} → retry in ${wait}ms (${attempt + 1}/${RETRY_DELAYS_MS.length})`,
+      `[ai-provider] ${res.status} → retry in ${wait}ms (${attempt + 1}/${RETRY_DELAYS_MS.length})`,
     );
     await waitForRetry(wait, init.signal);
   }
@@ -502,11 +591,9 @@ export function createOpenAICompatibleProvider(config: LlmConfig): AIProvider {
     );
     throwIfRedirected(res);
     if (!res.ok) {
-      if (res.status === 401 || res.status === 403) throw new LlmAuthError();
-      if (res.status === 429) throw new LlmQuotaError();
-      if (res.status === 503) throw new LlmOverloadedError();
-      const text = await readLimitedErrorText(res);
-      throw new Error(`LLM API error ${res.status}: ${text}`);
+      const knownFailure = classifyHttpFailure(res.status, "");
+      if (!(knownFailure instanceof LlmRequestError)) throw knownFailure;
+      throw classifyHttpFailure(res.status, await readLimitedErrorText(res));
     }
     const data = await readLimitedJson(res) as {
       choices?: Array<{ message?: { content?: unknown } }>;
@@ -518,13 +605,15 @@ export function createOpenAICompatibleProvider(config: LlmConfig): AIProvider {
     return content;
   }
 
+  const capabilities = byokCapabilities(config.baseUrl, config.modelId, config.imageCapability);
   return {
-    capabilities: byokCapabilities(config.baseUrl),
+    capabilities,
 
     async generate({ systemPrompt, prompt, images, responseSchema, signal }) {
+      const safeImages = capabilities.supportsImages ? images : undefined;
       const messages: Array<{ role: string; content: OpenAIContent }> = [];
       if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
-      messages.push({ role: "user", content: buildOpenAIContent(prompt, images) });
+      messages.push({ role: "user", content: buildOpenAIContent(prompt, safeImages) });
       return callChatCompletions(messages, !!responseSchema, signal);
     },
     async createSession(systemPrompt, fewShot) {
@@ -537,7 +626,13 @@ export function createOpenAICompatibleProvider(config: LlmConfig): AIProvider {
       }
       return {
         async prompt(input, options) {
-          messages.push({ role: "user", content: buildOpenAIContent(input, options?.images) });
+          messages.push({
+            role: "user",
+            content: buildOpenAIContent(
+              input,
+              capabilities.supportsImages ? options?.images : undefined,
+            ),
+          });
           const result = await callChatCompletions(
             messages,
             !!options?.responseSchema,
@@ -609,11 +704,9 @@ export function createAnthropicProvider(config: LlmConfig): AIProvider {
     );
     throwIfRedirected(res);
     if (!res.ok) {
-      if (res.status === 401 || res.status === 403) throw new LlmAuthError();
-      if (res.status === 429) throw new LlmQuotaError();
-      if (res.status === 529) throw new LlmOverloadedError();
-      const text = await readLimitedErrorText(res);
-      throw new Error(`Anthropic API error ${res.status}: ${text}`);
+      const knownFailure = classifyHttpFailure(res.status, "");
+      if (!(knownFailure instanceof LlmRequestError)) throw knownFailure;
+      throw classifyHttpFailure(res.status, await readLimitedErrorText(res));
     }
     const data = await readLimitedJson(res) as {
       content?: Array<{ text?: unknown }>;
@@ -625,16 +718,18 @@ export function createAnthropicProvider(config: LlmConfig): AIProvider {
     return text;
   }
 
+  const capabilities = byokCapabilities(config.baseUrl, config.modelId, config.imageCapability);
   return {
-    capabilities: byokCapabilities(config.baseUrl),
+    capabilities,
 
     async generate({ systemPrompt, prompt, images, responseSchema, signal }) {
+      const safeImages = capabilities.supportsImages ? images : undefined;
       const sys = responseSchema
         ? `${systemPrompt ?? ""}\n\nRespond with valid JSON only. Schema: ${JSON.stringify(responseSchema)}`
         : (systemPrompt ?? "");
       return callMessages(
         sys,
-        [{ role: "user", content: buildAnthropicContent(prompt, images) }],
+        [{ role: "user", content: buildAnthropicContent(prompt, safeImages) }],
         signal,
       );
     },
@@ -649,7 +744,13 @@ export function createAnthropicProvider(config: LlmConfig): AIProvider {
           const sys = options?.responseSchema
             ? `${systemPrompt}\n\nRespond with valid JSON only. Schema: ${JSON.stringify(options.responseSchema)}`
             : systemPrompt;
-          messages.push({ role: "user", content: buildAnthropicContent(input, options?.images) });
+          messages.push({
+            role: "user",
+            content: buildAnthropicContent(
+              input,
+              capabilities.supportsImages ? options?.images : undefined,
+            ),
+          });
           const result = await callMessages(sys, messages, options?.signal);
           messages.push({ role: "assistant", content: result });
           return result;

@@ -8,6 +8,12 @@ import {
   LlmOverloadedError,
   LlmQuotaError,
   LlmRedirectError,
+  LlmPermissionError,
+  LlmModelUnavailableError,
+  LlmUnsupportedRequestError,
+  LlmNetworkError,
+  LlmRequestError,
+  LlmResponseTooLargeError,
 } from "../ai-provider";
 
 vi.mock("sonner", () => ({
@@ -54,6 +60,18 @@ describe("toastLlmError", () => {
   it("리다이렉트 차단 → 전용 문구", () => {
     toastLlmError(new LlmRedirectError(), t, "draft.aiError");
     expect(toast.error).toHaveBeenCalledWith("llm.error.redirect");
+  });
+
+  it.each([
+    [new LlmPermissionError(), "llm.error.permissionDenied"],
+    [new LlmModelUnavailableError(), "llm.error.modelUnavailable"],
+    [new LlmUnsupportedRequestError(), "llm.error.unsupportedRequest"],
+    [new LlmNetworkError(), "llm.error.network"],
+    [new LlmRequestError(), "llm.error.request"],
+    [new LlmResponseTooLargeError(), "llm.error.responseTooLarge"],
+  ])("실패 유형에 맞는 안전한 안내: %s", (error, key) => {
+    toastLlmError(error, t, "draft.aiError");
+    expect(toast.error).toHaveBeenCalledWith(key);
   });
 
   it("그 외 에러 → 호출부가 준 fallback 키", () => {

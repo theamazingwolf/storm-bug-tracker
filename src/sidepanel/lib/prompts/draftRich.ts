@@ -70,12 +70,18 @@ const EXPECTED_SPLIT_HINT: LocaleTable<string> = {
 function getSectionDesc(
   locale: LocaleMode,
   mode: CaptureMode,
+  supportsImages: boolean,
 ): Record<TextSectionId, string> {
   const base = { ...localeValue(SECTION_DESC_BASE, locale) };
   // MODE_HINTS[mode]의 존재 확인은 기존 `?.` 방어를 유지한 것 — 오염된 세션에서 CaptureMode가
   // union 밖 값으로 들어와도 프롬프트 조립이 죽지 않는다.
   const modeHints = MODE_HINTS[mode];
   const hints = modeHints ? localeValue(modeHints, locale) : {};
+  if (mode === "screenshot" && !supportsImages) {
+    hints.description = locale === "ko"
+      ? " (캡처의 텍스트 컨텍스트와 사용자 설명 기반; 이미지는 전송되지 않음)"
+      : " (based on textual capture context and user description; no image was sent)";
+  }
   for (const [key, suffix] of Object.entries(hints)) {
     base[key as TextSectionId] += suffix;
   }
@@ -101,7 +107,7 @@ export function buildRichDraftPrompt(ctx: AiDraftSessionContext): string {
   lines.push("Before writing, work through the context internally:");
   lines.push("1. Align the user's description with the action timeline.");
   lines.push("2. Treat only the console/network errors near that moment as causal candidates.");
-  lines.push("3. Verify against the screenshot and style changes.");
+  lines.push("3. Verify against the captured evidence and style changes.");
   lines.push("4. State only what the context confirms. Put inference in notes, prefixed as a hypothesis.");
   lines.push("");
   lines.push("Context:");
@@ -109,7 +115,9 @@ export function buildRichDraftPrompt(ctx: AiDraftSessionContext): string {
   lines.push(`- Capture mode: ${ctx.captureMode}`);
 
   if (ctx.captureMode === "screenshot") {
-    lines.push("- The user attached a screenshot. Read it to ground the visual context.");
+    lines.push(ctx.caps.supportsImages
+      ? "- The user attached a screenshot. Read it to ground the visual context."
+      : "- A screenshot was captured but image input is disabled; do not claim to have seen it.");
   }
 
   if (ctx.captureMode === "element") {
@@ -126,7 +134,9 @@ export function buildRichDraftPrompt(ctx: AiDraftSessionContext): string {
         lines.push(
           `  ${index + 1}. <${element.tagName}> at ${element.selector}${frame}`,
         );
-        const imageDescription = describeAiDraftElementImages(elements, index);
+        const imageDescription = ctx.caps.supportsImages
+          ? describeAiDraftElementImages(elements, index)
+          : undefined;
         if (imageDescription) lines.push(`    ${imageDescription}`);
         for (const d of element.diffs) {
           lines.push(
@@ -213,7 +223,7 @@ export function buildRichDraftPrompt(ctx: AiDraftSessionContext): string {
     }
   }
 
-  const desc = getSectionDesc(ctx.locale, ctx.captureMode);
+  const desc = getSectionDesc(ctx.locale, ctx.captureMode, ctx.caps.supportsImages);
   lines.push("");
   lines.push("Output a JSON object with these exact keys:");
   lines.push(

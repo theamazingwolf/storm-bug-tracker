@@ -13,6 +13,11 @@ import {
   getProviderLabel,
   fetchModels,
   LlmAuthError,
+  LlmPermissionError,
+  LlmModelUnavailableError,
+  LlmUnsupportedRequestError,
+  LlmNetworkError,
+  LlmRequestError,
   LlmOverloadedError,
   LlmQuotaError,
   LlmRedirectError,
@@ -318,7 +323,7 @@ describe("createOpenAICompatibleProvider 재시도 통합", () => {
     vi.restoreAllMocks();
   });
 
-  it("503 응답을 재시도 끝까지 받으면 LlmOverloadedError throw", async () => {
+  it("503 재시도 후 overloaded 분류하고 URL·키를 로그에 남기지 않는다", async () => {
     const fail = {
       status: 503,
       headers: { get: () => null },
@@ -330,11 +335,11 @@ describe("createOpenAICompatibleProvider 재시도 통합", () => {
       .mockResolvedValueOnce(fail)
       .mockResolvedValueOnce(fail);
     vi.stubGlobal("fetch", fetchFn);
-    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const provider = createOpenAICompatibleProvider({
       baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-      apiKey: "k",
+      apiKey: "api-secret-test",
       modelId: "gemini-2.5-flash",
     });
 
@@ -346,6 +351,8 @@ describe("createOpenAICompatibleProvider 재시도 통합", () => {
 
     await expect(promise).rejects.toBeInstanceOf(LlmOverloadedError);
     expect(fetchFn).toHaveBeenCalledTimes(3);
+    expect(JSON.stringify(warning.mock.calls)).not.toContain("generativelanguage.googleapis.com");
+    expect(JSON.stringify(warning.mock.calls)).not.toContain("api-secret-test");
   });
 
   it("503 두 번 후 200이면 정상 응답", async () => {
@@ -411,7 +418,7 @@ describe("인증 오류 매핑", () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
-  it("Anthropic 경로 403이면 LlmAuthError throw", async () => {
+  it("Anthropic 경로 403이면 LlmPermissionError throw", async () => {
     const fetchFn = vi.fn().mockResolvedValue({
       status: 403,
       ok: false,
@@ -427,7 +434,7 @@ describe("인증 오류 매핑", () => {
     });
 
     await expect(provider.generate({ prompt: "hi" })).rejects.toBeInstanceOf(
-      LlmAuthError,
+      LlmPermissionError,
     );
   });
 });
@@ -831,7 +838,7 @@ describe("ProviderCapabilities", () => {
     });
   });
 
-  it("OpenAI 호환 → rich / 이미지 가능 / 예산 무제한", () => {
+  it("OpenAI 호환 remote default → rich / text-only / 예산 무제한", () => {
     const caps = createOpenAICompatibleProvider({
       baseUrl: "https://api.openai.com/v1",
       apiKey: "k",
@@ -839,19 +846,30 @@ describe("ProviderCapabilities", () => {
     }).capabilities;
     expect(caps).toEqual({
       promptStyle: "rich",
-      supportsImages: true,
+      supportsImages: false,
       contextBudgetChars: Number.MAX_SAFE_INTEGER,
     });
   });
 
-  it("Anthropic → rich / 이미지 가능 / 예산 무제한", () => {
+  it("Anthropic remote default → rich / text-only / 예산 무제한", () => {
     const caps = createAnthropicProvider({
       baseUrl: "https://api.anthropic.com/v1",
       apiKey: "k",
       modelId: "claude-sonnet-4-6",
     }).capabilities;
     expect(caps.promptStyle).toBe("rich");
+    expect(caps.supportsImages).toBe(false);
+  });
+
+  it("설정된 endpoint/model 이미지 확인만 affirmative", () => {
+    const caps = createOpenAICompatibleProvider({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "k",
+      modelId: "gpt-4o",
+      imageCapability: { baseUrl: "https://api.openai.com/v1", modelId: "gpt-4o" },
+    }).capabilities;
     expect(caps.supportsImages).toBe(true);
+    expect(caps.promptStyle).toBe("rich");
   });
 
   it("예산이 Infinity가 아니다 (직렬화 안전)", () => {
@@ -863,6 +881,117 @@ describe("ProviderCapabilities", () => {
 
 // 로컬 엔드포인트는 소형 모델(Ollama 3B 등)을 돌리는 게 기본이라 나노와 같은 제약을 갖는다.
 // rich 본문 + 스크린샷 + 절삭 없음을 그대로 밀면 3단 가드가 통째로 우회된다.
+describe("AI provider safe failure classification", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    [401, "", LlmAuthError],
+    [403, "forbidden", LlmPermissionError],
+    [404, "model not found", LlmModelUnavailableError],
+    [413, "", AiContextOverflowError],
+    [400, "prompt is too long for this model", AiContextOverflowError],
+    [429, "", LlmQuotaError],
+    [400, "image_url is not supported", LlmUnsupportedRequestError],
+    [400, "model does not support image input", LlmUnsupportedRequestError],
+    [400, "invalid argument; secret=sk-private", LlmRequestError],
+  ] as const)("HTTP %i is classified without exposing provider body", async (status, body, ErrorType) => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: false,
+      status,
+      headers: { get: () => null },
+      body: null,
+      text: async () => body,
+    })));
+    const provider = createOpenAICompatibleProvider({
+      baseUrl: "https://llm.example/v1",
+      apiKey: "do-not-leak",
+      modelId: "m",
+    });
+    let thrown: unknown;
+    try {
+      await provider.generate({ prompt: "context" });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ErrorType);
+    expect(String(thrown)).not.toContain("sk-private");
+    expect(String(thrown)).not.toContain("do-not-leak");
+  });
+
+  it("fetch TypeError is a safe actionable network error", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("Failed to fetch https://secret/path"); }));
+    const provider = createOpenAICompatibleProvider({
+      baseUrl: "https://llm.example/v1", apiKey: "key", modelId: "m",
+    });
+    await expect(provider.generate({ prompt: "context" })).rejects.toBeInstanceOf(LlmNetworkError);
+  });
+});
+
+describe("provider image egress capability guard", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("unknown-model direct and session calls omit images", async () => {
+    const fetchFn = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({ choices: [{ message: { content: "ok" } }] }),
+    }));
+    vi.stubGlobal("fetch", fetchFn);
+    const provider = createOpenAICompatibleProvider({
+      baseUrl: "https://llm.example/v1",
+      apiKey: "test",
+      modelId: "unknown",
+    });
+
+    await provider.generate({ prompt: "direct", images: ["data:image/png;base64,hidden"] });
+    const session = await provider.createSession("system");
+    await session.prompt("turn", { images: ["data:image/png;base64,hidden"] });
+
+    for (const [index, call] of fetchFn.mock.calls.entries()) {
+      const body = JSON.parse(String(call[1]?.body));
+      expect(body.messages.at(-1).content).toBe(index === 0 ? "direct" : "turn");
+      expect(JSON.stringify(body)).not.toContain("data:image");
+    }
+  });
+
+  it("Anthropic direct calls also omit unknown-model images", async () => {
+    const fetchFn = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({ content: [{ text: "ok" }] }),
+    }));
+    vi.stubGlobal("fetch", fetchFn);
+    await createAnthropicProvider({
+      baseUrl: "https://api.anthropic.com/v1", apiKey: "test", modelId: "unknown",
+    }).generate({ prompt: "direct", images: ["data:image/png;base64,hidden"] });
+    const body = JSON.parse(String(fetchFn.mock.calls[0][1]?.body));
+    expect(body.messages[0].content).toBe("direct");
+    expect(JSON.stringify(body)).not.toContain("data:image");
+  });
+
+  it("explicitly confirmed endpoint/model can send images", async () => {
+    const fetchFn = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({ choices: [{ message: { content: "ok" } }] }),
+    }));
+    vi.stubGlobal("fetch", fetchFn);
+    await createOpenAICompatibleProvider({
+      baseUrl: "https://llm.example/v1",
+      apiKey: "test",
+      modelId: "vision",
+      imageCapability: { baseUrl: "https://llm.example/v1", modelId: "vision" },
+    }).generate({ prompt: "direct", images: ["data:image/png;base64,allowed"] });
+    const body = JSON.parse(String(fetchFn.mock.calls[0][1]?.body));
+    expect(body.messages[0].content[0].type).toBe("image_url");
+  });
+});
+
 describe("byokCapabilities — 로컬 엔드포인트", () => {
   it.each([
     "http://localhost:11434/v1",
@@ -878,13 +1007,27 @@ describe("byokCapabilities — 로컬 엔드포인트", () => {
     "https://api.openai.com/v1",
     "https://openrouter.ai/api/v1",
     "https://llm.internal.example.com/v1",
-  ])("%s → 원격은 rich 유지", (baseUrl) => {
-    expect(byokCapabilities(baseUrl)).toEqual(BYOK_CAPABILITIES);
+  ])("%s → 원격은 rich지만 이미지 지원은 기본 미확인", (baseUrl) => {
+    expect(byokCapabilities(baseUrl)).toEqual({
+      ...BYOK_CAPABILITIES,
+      supportsImages: false,
+    });
   });
 
-  it("Mistral 프리셋이 원격으로 판정된다", () => {
+  it("이미지 지원 확인은 정확한 원격 endpoint/model 쌍에만 적용하고 local은 계속 text-only", () => {
+    const endpoint = "https://llm.example.com/v1";
+    const confirmed = { baseUrl: endpoint, modelId: "vision-v1" };
+    expect(byokCapabilities(endpoint, "vision-v1", confirmed).supportsImages).toBe(true);
+    expect(byokCapabilities(endpoint, "text-v1", confirmed).supportsImages).toBe(false);
+    expect(byokCapabilities("https://other.example/v1", "vision-v1", confirmed).supportsImages).toBe(false);
+    expect(byokCapabilities("http://localhost:11434/v1", "vision-v1", {
+      baseUrl: "http://localhost:11434/v1", modelId: "vision-v1",
+    }).supportsImages).toBe(false);
+  });
+
+  it("Mistral 프리셋은 원격 rich, 이미지 미확인으로 판정된다", () => {
     const mistral = PROVIDER_PRESETS.find((p) => p.id === "mistral")!;
-    expect(byokCapabilities(mistral.baseUrl)).toEqual(BYOK_CAPABILITIES);
+    expect(byokCapabilities(mistral.baseUrl)).toEqual({ ...BYOK_CAPABILITIES, supportsImages: false });
   });
 
   it("Ollama 프리셋이 로컬로 판정된다", () => {
@@ -892,8 +1035,8 @@ describe("byokCapabilities — 로컬 엔드포인트", () => {
     expect(byokCapabilities(ollama.baseUrl)).toEqual(LOCAL_BYOK_CAPABILITIES);
   });
 
-  it("잘못된 URL → 원격으로 간주(보수적 판정 아님, 기존 동작 유지)", () => {
-    expect(byokCapabilities("not a url")).toEqual(BYOK_CAPABILITIES);
+  it("잘못된 URL은 rich로 유지하지만 이미지 미확인", () => {
+    expect(byokCapabilities("not a url")).toEqual({ ...BYOK_CAPABILITIES, supportsImages: false });
   });
 
   it("프로바이더 팩토리가 baseUrl별 능력을 반영", () => {

@@ -8,6 +8,12 @@ import {
   LlmOverloadedError,
   LlmQuotaError,
   LlmRedirectError,
+  LlmPermissionError,
+  LlmModelUnavailableError,
+  LlmUnsupportedRequestError,
+  LlmNetworkError,
+  LlmRequestError,
+  LlmResponseTooLargeError,
 } from "./ai-provider";
 
 // 컨텍스트 초과는 원인·해법이 한 줄에 안 담겨 description까지 읽힐 시간이 필요하다.
@@ -33,6 +39,18 @@ export function toastLlmError(
     toast.error(t("llm.error.overloaded"));
   } else if (err instanceof LlmRedirectError) {
     toast.error(t("llm.error.redirect"));
+  } else if (err instanceof LlmPermissionError) {
+    toast.error(t("llm.error.permissionDenied"));
+  } else if (err instanceof LlmModelUnavailableError) {
+    toast.error(t("llm.error.modelUnavailable"));
+  } else if (err instanceof LlmUnsupportedRequestError) {
+    toast.error(t("llm.error.unsupportedRequest"));
+  } else if (err instanceof LlmNetworkError) {
+    toast.error(t("llm.error.network"));
+  } else if (err instanceof LlmRequestError) {
+    toast.error(t("llm.error.request"));
+  } else if (err instanceof LlmResponseTooLargeError) {
+    toast.error(t("llm.error.responseTooLarge"));
   } else {
     toast.error(t(fallbackKey));
   }

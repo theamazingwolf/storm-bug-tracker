@@ -91,6 +91,15 @@ describe("buildAiDraftRequest", () => {
     expect(images).toEqual(["data:cap1"]);
   });
 
+  it("remote text-only capability does not claim it received a screenshot", () => {
+    const prompt = buildAiDraftSessionPrompt({
+      ...CTX,
+      caps: { ...BYOK_CAPABILITIES, supportsImages: false },
+    });
+    expect(prompt).not.toContain("user attached a screenshot");
+    expect(prompt).not.toContain("스크린샷을 분석");
+  });
+
   it("systemPrompt가 ctx.existingDraft를 반영", () => {
     const { systemPrompt } = buildAiDraftRequest({
       caps: BYOK_CAPABILITIES,
@@ -106,6 +115,17 @@ describe("buildAiDraftRequest", () => {
 
   // 회귀 재현: Chrome 세션은 options.images를 읽지도 않는데 이미지를 만들어 넘기고
   // 있었다. 프롬프트는 "스크린샷을 분석하라"고 지시 → 환각.
+  it("remote default text-only omits captures and inline images", () => {
+    const { images, droppedImages } = buildAiDraftRequest({
+      caps: { ...BYOK_CAPABILITIES, supportsImages: false },
+      systemPrompt: SYS,
+      modeImages: ["data:capture"],
+      inlineImageDataUrls: ["data:inline"],
+    });
+    expect(images).toBeUndefined();
+    expect(droppedImages).toBe(0);
+  });
+
   it("supportsImages=false + 캡처 이미지 있음 → images=undefined (전송 안 함)", () => {
     const { images } = buildAiDraftRequest({
       caps: NANO_CAPABILITIES,

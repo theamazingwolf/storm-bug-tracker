@@ -52,6 +52,7 @@ import {
 } from "@/sidepanel/lib/aiLanguage";
 import {
   ANTHROPIC_MODELS,
+  byokCapabilities,
   detectProviderKind,
   fetchModels,
   GEMINI_MODELS,
@@ -298,6 +299,35 @@ function LlmConnected() {
               </Command>
             </PopoverContent>
           </Popover>
+        </Section>
+
+        <Section title={t("llm.section.imageCapability")}>
+          <div className="space-y-2">
+            <label className="flex items-start gap-3 text-sm">
+              <input
+                type="checkbox"
+                aria-label={t("llm.imageCapability.confirm")}
+                checked={
+                  llm.imageCapability?.baseUrl === llm.baseUrl &&
+                  llm.imageCapability?.modelId === llm.modelId
+                }
+                onChange={(event) =>
+                  setLlm({
+                    ...llm,
+                    imageCapability: event.target.checked
+                      ? { baseUrl: llm.baseUrl, modelId: llm.modelId }
+                      : undefined,
+                  })
+                }
+                disabled={!llm.modelId || byokCapabilities(llm.baseUrl).promptStyle === "compact"}
+                className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
+              />
+              <span>{t("llm.imageCapability.confirm")}</span>
+            </label>
+            <p className="text-sm text-muted-foreground">
+              {t("llm.imageCapability.help")}
+            </p>
+          </div>
         </Section>
 
         <AiLanguageSection />
