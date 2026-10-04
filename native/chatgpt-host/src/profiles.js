@@ -95,11 +95,17 @@ export class ProfileStore {
     await next;
   }
   async removeTokens(profileId) {
-    const record = await this.get(profileId);
-    if (!record) return false;
-    const { accessToken, refreshToken, idToken, ...identity } = record;
-    await this.#atomicWrite(this.#path(profileId), { ...identity, signedOut: true });
-    return true;
+    const path = this.#path(profileId);
+    const oldLock = this.#locks.get(profileId) ?? Promise.resolve();
+    const next = oldLock.then(async () => {
+      const record = await this.get(profileId);
+      if (!record) return false;
+      const { accessToken, refreshToken, idToken, ...identity } = record;
+      await this.#atomicWrite(path, { ...identity, signedOut: true });
+      return true;
+    });
+    this.#locks.set(profileId, next.then(() => {}, () => {}));
+    return next;
   }
   async #atomicWrite(path, value) {
     await ensurePrivateDir(this.directory);
