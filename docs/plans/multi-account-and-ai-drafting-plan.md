@@ -16,7 +16,7 @@
 - Capture → explicit user-authorized GitHub/Linear submission → repository backlog → execution is the intended flow. Polling/importing external issues or other external intake automation is not part of this scope.
 - No server-side capture storage, full redesign, billing, hosting, or connector expansion.
 - No live model, auth, GitHub, or Linear calls in tests. No provider credentials or spend.
-- ChatGPT/Codex subscription access is unresolved. `spike-001` is research-only; do not implement pasted OAuth claims or assume official support. No credential/browser-session access or auth attempt.
+- Official OpenAI documentation confirms SIWC for OSS/local personal tools using dynamic registration and `chatgpt.tokens.use.direct`. This does not authorize registration or implementation. The callback is loopback-only (`http://127.0.0.1:<port>/<fixed-path>`), Responses API calls require `store:false` and `stream:true`, model discovery is live, and image support is model-dependent. Do not copy the Noncommercial SDK devkit into this MIT fork. `spike-001` remains blocked until Tim chooses the local helper and specifies the target host OS; no credentials, browser auth, registration, or provider calls.
 
 ## Shared contracts and work lanes
 
@@ -62,9 +62,11 @@ Use captured context and optional user instruction to draft. Support an explicit
 
 **Independent of:** account/routing feature. Subscription work must wait for Lane F's evidence and a separate approved implementation ticket.
 
-### Lane F — subscription path evidence (research-only spike)
+### Lane F — subscription-backed AI (blocked)
 
-**Owns:** `spike-001` research artifact only. Use primary, current provider documentation and applicable terms to determine whether a supported subscription-backed ChatGPT/Codex client path exists and its auth/security/use constraints. Do not access credentials, browser sessions, or auth endpoints. No implementation in this lane. If supported, create a follow-on ticket with security review and explicit user approval; if inconclusive or unsupported, document the blocker and retain API-key support.
+**Owns:** `spike-001` only. Parent verification of the current [OpenAI SIWC guide](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) and [preview limitations](https://developers.openai.com/siwc/preview-limitations) confirmed support for OSS/local personal tools via dynamic registration and `chatgpt.tokens.use.direct`. The redirect callback must be `http://127.0.0.1:<port>/<fixed-path>` with the listener active before browser launch; `chromiumapp.org` is not documented. Responses API calls require `store:false` and `stream:true`; discover available models live; image support depends on the selected model. The SDK devkit is Noncommercial and cannot be copied into this MIT repo.
+
+Parent recommends a native-messaging local companion, not DNR interception. **Blocked:** wait for Tim to choose the helper approach and specify the target host OS. Do not register an app, access credentials/browser sessions, invoke auth, or call provider endpoints. After the decision, write a platform-specific security design, obtain security review and explicit approval, then create a separate implementation ticket. Lanes A–E (including API-key AI capability/error UX) remain independent.
 
 ## Verification plan
 
