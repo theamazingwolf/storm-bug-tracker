@@ -161,6 +161,16 @@ function github(remote: { body: string }, extra: Record<string, Handler> = {}): 
 const CREATE_TYPES = /\.(submitIssue|submitPage|createIssue|postMessage)$/;
 
 describe("retryAttachments — GitHub stage resume", () => {
+  it("stops a removed bound connection with authentication guidance before any provider request", async () => {
+    const plan = ghPlan({}, [capture.id]);
+    await seed({ files: [capture], bodyPlan: plan, connectionId: "removed-gh" });
+    const before = await db.readSubmissionRecovery("i");
+    const outcome = await runner.retryAttachments("i");
+    expect(outcome).toMatchObject({ status: "blocked", reason: "authentication" });
+    expect(sendBg).not.toHaveBeenCalled();
+    expect(await db.readSubmissionRecovery("i")).toEqual(before);
+  });
+
   it("keeps retry bound to its stored connection after the selected account changes", async () => {
     const plan = ghPlan({}, [capture.id]);
     await seed({ files: [capture], bodyPlan: plan, connectionId: "bound-gh" });

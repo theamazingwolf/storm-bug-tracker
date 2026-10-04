@@ -171,7 +171,7 @@ async function checkIdentity(meta: RetryMeta): Promise<AttachmentRetryReason | n
   if (meta.platform === "github" || meta.platform === "linear") {
     const records = useSettingsStore.getState().connections[meta.platform];
     if (connectionId) {
-      if (!records.some((record) => record.id === connectionId)) return "account-unverified";
+      if (!records.some((record) => record.id === connectionId)) return "authentication";
     } else {
       // Legacy no-ID retry is safe only when a single credential record exists.
       if (records.length !== 1) return "account-unverified";

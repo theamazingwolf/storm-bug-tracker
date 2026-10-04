@@ -26,6 +26,8 @@ const ALLOWED = [
   "@/sidepanel/recorder-control",
   "@/sidepanel/lib/aiLanguage",
   "@/sidepanel/lib/initialJiraFields",
+  // Audited pure destination helpers; the no-runtime-import test below guards this edge.
+  "@/sidepanel/lib/destinationBinding",
   "@/sidepanel/lib/attachmentLimits",
   "@/sidepanel/lib/annotationDefaults",
   "@/sidepanel/lib/pageUrl",
@@ -145,6 +147,18 @@ describe("store 번들 경계", () => {
   it("허용 목록에 죽은 항목이 없다", () => {
     const imported = new Set(files.flatMap((p) => importSpecifiers(readFileSync(p, "utf8"))));
     expect(ALLOWED.filter((a) => !imported.has(a))).toEqual([]);
+  });
+});
+
+describe("destination binding helpers remain a pure shared leaf", () => {
+  const source = readFileSync(join(process.cwd(), "src/sidepanel/lib/destinationBinding.ts"), "utf8");
+
+  it("reads the actual binding resolver", () => {
+    expect(source).toContain("export function resolveDestinationBinding");
+  });
+
+  it("does not pull sidepanel or other runtime dependencies into the store", () => {
+    expect(importSpecifiers(source)).toEqual([]);
   });
 });
 
