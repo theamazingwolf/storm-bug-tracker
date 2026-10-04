@@ -25,3 +25,70 @@ coverage/*
 
 # git worktree 체크아웃 (다른 브랜치 사본 — 커밋·테스트 수집 대상 아님)
 .worktrees/
+
+# Local agent/runtime definitions and configuration. Recreate with the local roster CLI.
+**/.agents/
+**/.claude/
+**/.codex/
+**/.pi/
+**/.grok/
+**/.cursor/rules/
+**/.opencode/agents/
+**/.zcode/agents/
+**/.hermes/agents/
+**/.kimi-code/agents/
+**/.roster/
+**/.roster-manifest.json
+**/.cadre-manifest.json
+
+# Local work artifacts; never include environment credentials, captures, or handoff logs.
+.env.local
+.env.*.local
+handoff/
+captures/
+local-captures/
+*.log
+
+# Disabled upstream automation retained only in this local checkout for recovery.
+.github/workflows/trigger-web-deploy.yml
+scripts/sync-agents.mjs
+
+# Optional local scaffolds from roster init; public context is maintained in AGENTS.md.
+.fallowrc.jsonc
+visual-regression.yml
+CONTEXT.md
+.out-of-scope/
+
+# roster-generated (agent IP — regenerate with `roster deploy`, don't commit)
+**/.claude/agents/
+**/.claude/skills/
+**/.claude/references/
+**/.agents/skills/
+**/.cursor/rules/pm.mdc
+**/.cursor/rules/software-architect.mdc
+**/.cursor/rules/pkg-architect.mdc
+**/.cursor/rules/ai-architect.mdc
+**/.cursor/rules/brand-strategist.mdc
+**/.cursor/rules/copywriter.mdc
+**/.cursor/rules/designer.mdc
+**/.cursor/rules/developer.mdc
+**/.cursor/rules/pkg-developer.mdc
+**/.cursor/rules/devops.mdc
+**/.cursor/rules/pkg-devops.mdc
+**/.cursor/rules/server-admin.mdc
+**/.cursor/rules/docs-writer.mdc
+**/.cursor/rules/qa-reviewer.mdc
+**/.cursor/rules/experience-reviewer.mdc
+**/.cursor/rules/security-reviewer.mdc
+**/.cursor/rules/art-director.mdc
+**/.opencode/agents/
+**/opencode.json
+**/.hermes/agents/
+**/.hermes/README.md
+**/.codex/
+**/.zcode/agents/
+**/.grok/agents/
+**/.pi/agents/
+**/.kimi-code/agents/
+**/.roster-manifest.json
+**/.cadre-manifest.json

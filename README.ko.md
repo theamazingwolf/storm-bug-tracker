@@ -198,6 +198,7 @@ OAuth 또는 토큰으로 연결합니다. 모든 **트래커**가 전송 대상
 
 ```bash
 pnpm install
+cp .env.ci .env.local # 로컬 검사에서 사용할 결정적 더미 연동 설정
 pnpm dev          # 개발 서버 (@crxjs/vite-plugin 기반 HMR)
 pnpm build        # 프로덕션 빌드 → dist/ (build:log-viewer를 먼저 실행)
 pnpm build:log-viewer  # 로그 뷰어 번들만 (build/build:store/build:e2e가 자동 포함)
@@ -210,8 +211,6 @@ pnpm build:e2e    # e2e 전용 빌드 → dist-e2e/ (테스트 픽스처 — 로
 pnpm test:e2e     # Playwright e2e 스위트 (build:e2e 선행 필요)
 pnpm test:coverage # 커버리지 리포트
 pnpm check:prearm # 레코더 pre-arm 청크가 동기 IIFE로 남았는지 검사 (CI 게이트)
-pnpm sync:agents  # Codex 미러 재생성 (AGENTS.md, .agents/skills/)
-pnpm sync:agents:check # 미러 드리프트 시 실패 (CI 게이트)
 ```
 
 `chrome://extensions`에서 개발자 모드로 `dist/`를 압축 해제된 확장으로 로드하세요.

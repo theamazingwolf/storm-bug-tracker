@@ -8,13 +8,13 @@
 
 ## 1. 운영 방식
 
-- `guide/ko`·`guide/en`은 사용자 가이드의 in-repo 소스다(코드가 진실, 원격에서 직접 편집하지 않는다). **bugshot-web docs-portal이 빌드타임에 `guide/{ko,en}`를 fetch해 `bug-shot.com/{locale}/docs`로 서빙**한다(guide 변경 시 `.github/workflows/trigger-web-deploy.yml`이 Vercel 재배포 트리거).
+- `guide/ko`·`guide/en`은 사용자 가이드의 in-repo 소스다(코드가 진실, 원격에서 직접 편집하지 않는다). This public fork does not configure or trigger an external docs-portal deployment.
 - **언어별 독립**이다:
   - ko → `https://bug-shot.com/ko/docs`
   - en → `https://bug-shot.com/en/docs`
   - URL 정의: `src/lib/external-links.ts`의 `USER_GUIDE_URLS`. 사이드패널의 "BugShot 가이드" 버튼이 로케일에 맞춰 이 URL로 보낸다.
 - 언어별 독립이라 **assets도 언어별로 따로** 둔다(`guide/ko/assets/`, `guide/en/assets/`).
-- 커밋 prefix는 **`docs(guide): ...`** (`/push` 신선도 검사의 guide 트리거 대상).
+- Use the commit prefix **`docs(guide): ...`** for guide changes.
 
 ## 2. IA / 파일 트리 (언어당 동일 — ko/en 양쪽 대칭)
 

@@ -210,6 +210,7 @@ submission *to that same destination*, and is dropped when you switch.
 
 ```bash
 pnpm install
+cp .env.ci .env.local # deterministic dummy integration config for local checks
 pnpm dev          # dev server (HMR via @crxjs/vite-plugin)
 pnpm build        # production build → dist/ (runs build:log-viewer first)
 pnpm build:log-viewer  # log viewer bundle only (build/build:store/build:e2e run it automatically)
@@ -222,8 +223,6 @@ pnpm build:e2e    # e2e-only build → dist-e2e/ (test fixture — never load/up
 pnpm test:e2e     # Playwright e2e suite (run build:e2e first)
 pnpm test:coverage # coverage report
 pnpm check:prearm # verify the recorder pre-arm chunk stayed a sync IIFE (CI gate)
-pnpm sync:agents  # regenerate the Codex mirror (AGENTS.md, .agents/skills/)
-pnpm sync:agents:check # fail if the mirror drifted (CI gate)
 ```
 
 Load the unpacked extension from `dist/` at `chrome://extensions` (developer mode).

@@ -23,8 +23,6 @@
     "coverage:update": "node scripts/coverage-report.mjs --update",
     "postmortem:report": "node scripts/postmortem-report.mjs",
     "postmortem:check": "node scripts/postmortem-report.mjs --check",
-    "sync:agents": "node scripts/sync-agents.mjs",
-    "sync:agents:check": "node scripts/sync-agents.mjs --check",
     "check:prearm": "node scripts/check-prearm-chunk.mjs"
   },
   "dependencies": {

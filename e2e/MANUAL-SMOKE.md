@@ -238,7 +238,7 @@ COVERAGE는 이 축을 *"en에서만 발생"*으로 적지만 **로케일이 아
 | S5 | `chromewebstore.google.com` | Chrome이 content script 주입을 차단하는 실제 호스트 |
 | S6 | S1~S4 중 1개 | 패널만 보므로 대상은 배경. 고정해야 조합 간 비교가 선다 |
 
-**사이트가 바뀌면 이 표만 고친다.** 스킬 본문에는 사이트를 박지 않는다 — 사이트는 절차보다 훨씬 자주 바뀌는데, 스킬을 고치면 `pnpm sync:agents`로 미러를 재생성해야 한다.
+**사이트가 바뀌면 이 표만 고친다.** The procedure is documented separately; keep test-site choices in this table rather than duplicating them in workflow instructions.
 
 ---
 
