@@ -257,9 +257,11 @@ function EditableDraftDetailDialog({
 
   // Slack 보존 이슈는 Slack 탭을 제외(승격 전용). 그 외엔 연결된 전체 플랫폼.
   const available = useMemo(
-    () => Array.from(new Set([
+    () => Array.from(new Set<PlatformId>([
       ...(issue ? submittablePlatforms(issue, accounts) : connectedPlatforms(accounts)),
       ...destinationProfiles.map((profile) => profile.platform),
+      "github",
+      "linear",
     ])),
     [issue, accounts, destinationProfiles],
   );
@@ -307,7 +309,9 @@ function EditableDraftDetailDialog({
   function handleDestinationBindingChange(binding: DestinationProfile | null) {
     setDestinationBinding(binding);
     if (!issue) return;
-    patchIssue(issue.id, { destinationBinding: binding ? cloneDestinationBinding(binding) : undefined, ...(binding ? { platform: binding.platform } : {}) });
+    if (!isSlackPreserved(issue)) {
+      patchIssue(issue.id, { destinationBinding: binding ? cloneDestinationBinding(binding) : undefined, ...(binding ? { platform: binding.platform } : {}) });
+    }
     if (binding?.platform === "github") {
       const connection = useSettingsStore.getState().connections.github.find((item) => item.id === binding.connectionId);
       setGhFields(githubFieldsForDestination(binding, connection));
@@ -363,7 +367,7 @@ function EditableDraftDetailDialog({
     setPlatform(p);
     if (destinationBinding && destinationBinding.platform !== p) {
       setDestinationBinding(null);
-      if (issue) patchIssue(issue.id, { destinationBinding: undefined });
+      if (issue && !isSlackPreserved(issue)) patchIssue(issue.id, { destinationBinding: undefined });
     }
     // Slack 보존 이슈는 platform="slack"을 유지해야 PlatformChip·permalink·canPromoteSlack이
     // 일치한다. 승격 탭 전환을 영속화하면 미제출 닫기 시 platform만 트래커로 바뀌어 불일치.
@@ -607,6 +611,7 @@ function EditableDraftDetailDialog({
       url: result.url,
       githubOwner: ghFields.owner,
       githubRepo: ghFields.repo,
+      destinationBinding: cloneDestinationBinding(binding),
       githubLabels: ghFields.label ? [ghFields.label] : undefined,
     });
     useSettingsStore.getState().setConnectionLastSubmitFields("github", binding.connectionId, githubLastSubmitFields(ghFields));
@@ -645,6 +650,7 @@ function EditableDraftDetailDialog({
       key: result.key,
       url: result.url,
       linearIdentifier: result.key,
+      destinationBinding: cloneDestinationBinding(binding),
       linearTeamKey: linearFields.teamKey,
       linearLabelName: linearFields.labelName,
     });

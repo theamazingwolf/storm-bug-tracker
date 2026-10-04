@@ -15,7 +15,10 @@ const originalRemove = useIssuesStore.getState().removeIssue;
 const originalClear = useIssuesStore.getState().clearIssues;
 beforeEach(() => {
   vi.stubGlobal("chrome", { storage: { local: { get: vi.fn(async () => ({})), set: vi.fn(async () => {}), remove: vi.fn(async () => {}) } } });
-  useSettingsStore.setState({ accounts: {}, lastSubmitFields: {} });
+  useSettingsStore.setState({
+    accounts: {}, lastSubmitFields: {}, connections: { github: [], linear: [] },
+    selectedConnectionIds: {}, destinationProfiles: [], websiteOriginMappings: [],
+  });
   useIssuesStore.setState({ issues: [issue] });
 });
 afterEach(() => { cleanup(); useIssuesStore.setState({ removeIssue: originalRemove, clearIssues: originalClear, issues: [] }); vi.clearAllMocks(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
@@ -65,6 +68,47 @@ it("opens recovery read-only without connected accounts and never offers submiss
   expect(screen.queryByTestId("submit-issue")).toBeNull();
   expect(screen.queryByText("integrations.cta")).toBeNull();
   await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("recovery.error"));
+});
+
+it("offers GitHub and Linear inline pickers when reopening a zero-account saved draft", async () => {
+  const user = userEvent.setup();
+  render(<DraftDetailDialog issue={issue} open autoOpenSubmit onOpenChange={vi.fn()} />);
+  await screen.findByTestId("submit-fields-dialog");
+
+  expect(screen.getByTestId("platform-tab-github")).toBeTruthy();
+  expect(screen.getByTestId("platform-tab-linear")).toBeTruthy();
+  await user.click(screen.getByTestId("platform-tab-linear"));
+  expect(screen.getByRole("combobox", { name: "destination.label" })).toBeTruthy();
+  expect(screen.getByRole("combobox", { name: "destinations.field.connection" })).toBeTruthy();
+  expect(useIssuesStore.getState().issues[0].destinationBinding).toBeUndefined();
+});
+
+it("keeps a Slack-preserved issue unchanged when a promotion destination is selected locally", async () => {
+  const record: IssueRecord = {
+    ...issue, id: "slack-promotion", status: "submitted", platform: "slack", slackPreserved: true,
+    key: "1", url: "https://slack.com/archives/C/p1", submissionRecoveryId: undefined,
+  };
+  const connection = {
+    id: "github-promotion", platform: "github" as const,
+    account: { platform: "github" as const, connectedAt: 1, auth: { kind: "pat" as const, pat: "mock", viewerLogin: "viewer" }, defaults: {} },
+  };
+  const profile = { id: "promotion-destination", platform: "github" as const, connectionId: connection.id, owner: "org", repo: "repo" };
+  useSettingsStore.setState({
+    connections: { github: [connection], linear: [] },
+    destinationProfiles: [profile],
+  });
+  useIssuesStore.setState({ issues: [record] });
+  const user = userEvent.setup();
+  render(<DraftDetailDialog issue={record} open autoOpenSubmit onOpenChange={vi.fn()} />);
+  await screen.findByTestId("submit-fields-dialog");
+  await user.selectOptions(screen.getByRole("combobox", { name: "destination.label" }), `saved:${profile.id}`);
+
+  expect(useIssuesStore.getState().issues[0]).toMatchObject({
+    id: record.id, status: "submitted", platform: "slack", slackPreserved: true,
+  });
+  expect(useIssuesStore.getState().issues[0].destinationBinding).toBeUndefined();
+  await user.click(screen.getByRole("button", { name: "common.close" }));
+  expect(useIssuesStore.getState().issues[0]).toMatchObject({ platform: "slack", slackPreserved: true });
 });
 
 it.each([true, false])("uses the current journal destination, never the previous Slack link (created=%s)", async (created) => {

@@ -6,11 +6,13 @@ import type { ConsoleLog } from "@/types/console";
 import type { ActionLog } from "@/types/action";
 import type { PlatformId } from "@/types/platform";
 import type { DestinationProfile } from "@/types/connection";
+import { matchWebsiteOrigin } from "@/lib/site-destination-routing";
+import { cloneDestinationBinding, resolveDestinationBinding } from "@/sidepanel/lib/destinationBinding";
 import type { EnvironmentRow } from "@/types/environment";
 import type { AttachmentResult, UserAttachmentMeta } from "@/types/attachment";
 import { onBlobSaveFailed } from "@/lib/app-events";
 import { useIssuesStore, type IssueRecord } from "./issues-store";
-import { jiraSiteId, useSettingsStore } from "./settings-store";
+import { jiraSiteId, pickInitialPlatform, useSettingsStore } from "./settings-store";
 import { initialJiraFields } from "@/sidepanel/lib/initialJiraFields";
 import { saveVideoBlob, deleteVideoBlob, saveImageBlob, saveNetworkLog, deleteNetworkLog, saveConsoleLog, deleteConsoleLog, saveActionLog, deleteActionLog, dataUrlToBlob, saveAttachmentBlob, deleteAttachmentBlob, deleteAttachmentBlobs, rekeyAttachmentBlobs } from "./blob-db";
 import { takeWithinLimits, type TakeWithinLimitsResult } from "@/sidepanel/lib/attachmentLimits";
@@ -940,6 +942,26 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const priorBinding = state.currentIssueId
       ? useIssuesStore.getState().issues?.find((issue) => issue.id === id)?.destinationBinding
       : undefined;
+    let captureBinding = state.destinationBinding;
+    let capturePlatform = state.targetPlatform;
+    if (!state.currentIssueId && !captureBinding) {
+      const settings = useSettingsStore.getState();
+      const connections = settings.connections ?? { github: [], linear: [] };
+      const profiles = settings.destinationProfiles ?? [];
+      const mappings = settings.websiteOriginMappings ?? [];
+      const match = matchWebsiteOrigin(target.url, mappings, profiles);
+      if (match.status === "matched" && resolveDestinationBinding(match.destination, connections).ok) {
+        captureBinding = cloneDestinationBinding(match.destination);
+        capturePlatform = match.destination.platform;
+      }
+    }
+    if (!state.currentIssueId && !captureBinding) {
+      const settings = useSettingsStore.getState();
+      const connections = settings.connections ?? { github: [], linear: [] };
+      const accounts = settings.accounts ?? {};
+      capturePlatform = pickInitialPlatform(accounts, settings.lastSubmittedPlatform)
+        ?? (connections.github.length > 0 ? "github" : connections.linear.length > 0 ? "linear" : state.targetPlatform);
+    }
     // 4분기 공통 필드. saveDraft가 병합이라 키를 조건부로 빼면 직전 세션 값이 되살아나므로
     // 분기는 고유 필드만 스프레드로 얹는다 — 빼는 게 아니라 덮는 방향으로만 갈린다.
     // 반환 타입을 박아두는 건 스프레드가 saveDraft 호출부의 excess property 검사를 지나치기
@@ -960,9 +982,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     > => ({
       id,
       status: "draft",
-      platform: state.targetPlatform,
-      ...(state.destinationBinding
-        ? { destinationBinding: copyDestinationBinding(state.destinationBinding) }
+      platform: capturePlatform,
+      ...(captureBinding
+        ? { destinationBinding: copyDestinationBinding(captureBinding) }
         : priorBinding ? { destinationBinding: undefined } : {}),
       title: draft.title,
       createdAt: Date.now(),
@@ -1158,7 +1180,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (!ok) onBlobSaveFailed.fire();
         });
     }
-    set({ phase: "previewing", currentIssueId: id });
+    set({
+      phase: "previewing",
+      currentIssueId: id,
+      ...(!state.currentIssueId ? {
+        targetPlatform: capturePlatform,
+        destinationBinding: captureBinding ? cloneDestinationBinding(captureBinding) : null,
+      } : {}),
+    });
     return true;
   },
 

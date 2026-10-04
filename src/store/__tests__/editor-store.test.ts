@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { NetworkLog } from "@/types/network";
 import type { ConsoleLog } from "@/types/console";
+import type { ConnectionRecords, DestinationProfile, WebsiteOriginMapping } from "@/types/connection";
+import type { PlatformId } from "@/types/platform";
 
 /* ------------------------------------------------------------------ */
 /*  Mocks                                                              */
@@ -62,7 +64,14 @@ vi.mock("@/store/issues-store", () => ({
 
 // Jira prefill 테스트가 lastSubmitFields/accounts를 갈아끼울 수 있게 가변으로 둔다(기본값은 빈 객체 — 기존 동작 불변).
 const settingsState = vi.hoisted(() => ({
-  current: {} as { lastSubmitFields: Record<string, unknown>; accounts: Record<string, unknown> },
+  current: {} as {
+    lastSubmitFields: Record<string, unknown>;
+    accounts: Record<string, unknown>;
+    connections?: ConnectionRecords;
+    destinationProfiles?: DestinationProfile[];
+    websiteOriginMappings?: WebsiteOriginMapping[];
+    lastSubmittedPlatform?: PlatformId;
+  },
 }));
 settingsState.current = { lastSubmitFields: {}, accounts: {} };
 
@@ -3319,6 +3328,90 @@ describe("livePageUrl", () => {
     useEditorStore.getState().setLivePageUrl("https://e.com/next");
     useEditorStore.getState().startFreeform(target);
     expect(useEditorStore.getState().livePageUrl).toBe("https://e.com/next");
+  });
+});
+
+describe("confirmDraft — fresh capture destination boundary", () => {
+  const githubConnection = {
+    id: "github-connection",
+    platform: "github" as const,
+    account: { platform: "github" as const, connectedAt: 1, auth: { kind: "pat" as const, pat: "mock", viewerLogin: "viewer" }, defaults: {} },
+  };
+  const mappedProfile: DestinationProfile = {
+    id: "mapped-destination", platform: "github", connectionId: githubConnection.id, owner: "org", repo: "repo",
+  };
+  const linearProfile: DestinationProfile = {
+    id: "other-destination", platform: "linear", connectionId: "linear-connection",
+    organizationId: "org-2", teamId: "team-2",
+  };
+
+  beforeEach(() => {
+    useEditorStore.setState(useEditorStore.getInitialState(), true);
+    mockSaveDraft.mockClear();
+    settingsState.current = {
+      lastSubmitFields: {}, accounts: {},
+      connections: { github: [githubConnection], linear: [] },
+      destinationProfiles: [mappedProfile],
+      websiteOriginMappings: [{ origin: "https://example.com", destinationId: mappedProfile.id }],
+    };
+    useEditorStore.setState({
+      captureMode: "freeform", phase: "drafting", target, targetPlatform: "jira",
+      draft: { title: "fresh capture", sections: {} }, currentIssueId: null, destinationBinding: null,
+    });
+  });
+
+  it("binds a new capture to an exact-origin destination before saving the first draft", () => {
+    expect(useEditorStore.getState().confirmDraft()).toBe(true);
+    const record = mockSaveDraft.mock.calls[0][0];
+    expect(record.platform).toBe("github");
+    expect(record.destinationBinding).toEqual({
+      id: mappedProfile.id, platform: "github", connectionId: githubConnection.id, owner: "org", repo: "repo",
+    });
+    expect(useEditorStore.getState().destinationBinding).toEqual(record.destinationBinding);
+    expect(useEditorStore.getState().currentIssueId).toBe(record.id);
+  });
+
+  it("leaves unmatched and ambiguous origins unbound for explicit picker selection", () => {
+    settingsState.current.websiteOriginMappings = [];
+    expect(useEditorStore.getState().confirmDraft()).toBe(true);
+    let record = mockSaveDraft.mock.calls[0][0];
+    expect(record.destinationBinding).toBeUndefined();
+    expect(record.platform).toBe("github");
+
+    useEditorStore.setState(useEditorStore.getInitialState(), true);
+    mockSaveDraft.mockClear();
+    settingsState.current.destinationProfiles = [mappedProfile, linearProfile];
+    settingsState.current.connections = {
+      github: [githubConnection],
+      linear: [{ id: "linear-connection", platform: "linear", account: { platform: "linear", connectedAt: 1, auth: { kind: "apiKey", apiKey: "mock", viewerName: "v", viewerEmail: "v@example.test" }, defaults: {} }, organization: { id: "org-2", name: "Org 2" } }],
+    };
+    settingsState.current.websiteOriginMappings = [
+      { origin: "https://example.com", destinationId: mappedProfile.id },
+      { origin: "https://example.com", destinationId: linearProfile.id },
+    ];
+    useEditorStore.setState({
+      captureMode: "freeform", phase: "drafting", target, targetPlatform: "jira",
+      draft: { title: "ambiguous capture", sections: {} }, currentIssueId: null, destinationBinding: null,
+    });
+    expect(useEditorStore.getState().confirmDraft()).toBe(true);
+    record = mockSaveDraft.mock.calls[0][0];
+    expect(record.destinationBinding).toBeUndefined();
+    expect(record.platform).toBe("github");
+  });
+
+  it.each(["webhook", "clickup"] as const)("preserves last-submitted %s for a fresh draft", (platform) => {
+    settingsState.current.accounts = { webhook: {}, clickup: {} };
+    settingsState.current.lastSubmittedPlatform = platform;
+    settingsState.current.websiteOriginMappings = [];
+    expect(useEditorStore.getState().confirmDraft()).toBe(true);
+    expect(mockSaveDraft.mock.calls[0][0].platform).toBe(platform);
+  });
+
+  it("preserves an explicit manual binding instead of replacing it with the website mapping", () => {
+    const manual = { ...mappedProfile, owner: "manual-org", repo: "manual-repo" };
+    useEditorStore.setState({ destinationBinding: manual, targetPlatform: "github" });
+    expect(useEditorStore.getState().confirmDraft()).toBe(true);
+    expect(mockSaveDraft.mock.calls[0][0].destinationBinding).toMatchObject({ owner: "manual-org", repo: "manual-repo" });
   });
 });
 
