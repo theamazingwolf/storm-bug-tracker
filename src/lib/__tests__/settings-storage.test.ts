@@ -1,21 +1,30 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let stored: unknown;
+let overlayStored: unknown;
+let beforeOverlaySet: (() => void) | undefined;
 
 vi.stubGlobal("chrome", {
   storage: {
     local: {
-      get: async (key: string) => ({ [key]: stored === undefined ? undefined : structuredClone(stored) }),
+      get: async (key: string) => ({ [key]: key === SETTINGS_STORAGE_KEY ? (stored === undefined ? undefined : structuredClone(stored)) : (overlayStored === undefined ? undefined : structuredClone(overlayStored)) }),
       // Chrome storage returns/persists structured clones, not shared mutable object references.
       set: async (obj: Record<string, unknown>) => {
-        stored = obj[SETTINGS_STORAGE_KEY] === undefined ? undefined : structuredClone(obj[SETTINGS_STORAGE_KEY]);
+        if (CONNECTION_TOKEN_OVERLAY_STORAGE_KEY in obj) beforeOverlaySet?.();
+        if (SETTINGS_STORAGE_KEY in obj) stored = obj[SETTINGS_STORAGE_KEY] === undefined ? undefined : structuredClone(obj[SETTINGS_STORAGE_KEY]);
+        if (CONNECTION_TOKEN_OVERLAY_STORAGE_KEY in obj) overlayStored = obj[CONNECTION_TOKEN_OVERLAY_STORAGE_KEY] === undefined ? undefined : structuredClone(obj[CONNECTION_TOKEN_OVERLAY_STORAGE_KEY]);
       },
+      remove: async (key: string) => { if (key === SETTINGS_STORAGE_KEY) stored = undefined; else overlayStored = undefined; },
     },
   },
 });
 
 import {
   readStoredAuth,
+  resolveStoredGithubConnectionAuth,
+  resolveStoredLinearConnectionAuth,
+  reconcileConnectionTokenOverlays,
+  CONNECTION_TOKEN_OVERLAY_STORAGE_KEY,
   readStoredAsanaAuth,
   readStoredClickupAuth,
   readStoredGithubAuth,
@@ -46,6 +55,8 @@ function readBack(): any {
 
 beforeEach(() => {
   stored = undefined;
+  overlayStored = undefined;
+  beforeOverlaySet = undefined;
 });
 
 describe("readStoredAuth", () => {
@@ -139,12 +150,25 @@ describe("플랫폼별 write 계열 (토큰 갱신 영속)", () => {
     ["asana", writeStoredAsanaOAuthTokens],
   ] as const;
 
+  async function effectiveConnectionAuth(platform: string): Promise<Record<string, any> | undefined> {
+    if (platform === "github") {
+      const result = await resolveStoredGithubConnectionAuth();
+      return result.status === "resolved" ? result.auth as unknown as Record<string, any> : undefined;
+    }
+    if (platform === "linear") {
+      const result = await resolveStoredLinearConnectionAuth();
+      return result.status === "resolved" ? result.auth as unknown as Record<string, any> : undefined;
+    }
+    return readBack().state.accounts[platform].auth;
+  }
+
   it.each(cases)("%s: oauth 계정의 accessToken을 갱신해 저장한다", async (platform, write) => {
     stored = envelope({
-      accounts: { [platform]: { auth: { kind: "oauth", accessToken: "old", refreshToken: "r0", expiresAt: 1 } } },
+      accounts: { [platform]: { auth: { kind: "oauth", accessToken: "old", refreshToken: "r0", expiresAt: 1, grantedAt: 1 } } },
     });
-    await write({ kind: "oauth", accessToken: "new", refreshToken: "r1", expiresAt: 999 } as any);
-    expect(readBack().state.accounts[platform].auth.accessToken).toBe("new");
+    await write({ kind: "oauth", accessToken: "new", refreshToken: "r1", expiresAt: 999, grantedAt: 1, tokenType: "bearer", scope: "scope" } as any);
+    expect((await effectiveConnectionAuth(platform))?.accessToken).toBe("new");
+    if (platform === "github" || platform === "linear") expect(readBack().state.accounts[platform].auth.accessToken).toBe("old");
   });
 
   // apiKey/PAT 계정에 OAuth 토큰을 덮어쓰면 자격증명이 깨진다 — 가드가 핵심이다.
@@ -168,40 +192,43 @@ describe("플랫폼별 write 계열 (토큰 갱신 영속)", () => {
   // accessToken만 보면 부족하다 — 갱신이 영속되지 않는 진짜 증상은 refreshToken/expiresAt 쪽에서 난다.
   it.each(cases)("%s: refreshToken과 expiresAt도 함께 갱신한다", async (platform, write) => {
     stored = envelope({
-      accounts: { [platform]: { auth: { kind: "oauth", accessToken: "old", refreshToken: "r0", expiresAt: 1 } } },
+      accounts: { [platform]: { auth: { kind: "oauth", accessToken: "old", refreshToken: "r0", expiresAt: 1, grantedAt: 1 } } },
     });
-    await write({ kind: "oauth", accessToken: "new", refreshToken: "r1", expiresAt: 999, scope: "s1", tokenType: "bearer" } as any);
-    const auth = readBack().state.accounts[platform].auth;
-    expect(auth.refreshToken).toBe("r1");
-    expect(auth.expiresAt).toBe(999);
+    await write({ kind: "oauth", accessToken: "new", refreshToken: "r1", expiresAt: 999, scope: "s1", tokenType: "bearer", grantedAt: 1 } as any);
+    const auth = await effectiveConnectionAuth(platform);
+    expect(auth?.refreshToken).toBe("r1");
+    expect(auth?.expiresAt).toBe(999);
   });
 
   // GitHub만 `?? cur.X` 폴백 시맨틱이다 — 응답에 refreshToken/expiresAt이 없는 경우가 있어,
   // 이게 단순 대입으로 퇴화하면 기존 refresh token이 undefined로 날아가 무한 재로그인이 된다.
-  it("reconstructs a missing selected compatibility projection from that exact connection", async () => {
+  it("persists a grant-bound overlay without rewriting a missing selected compatibility projection", async () => {
     const current = { kind: "oauth", accessToken: "old", refreshToken: "r0", expiresAt: 1, tokenType: "bearer", scope: "repo", grantedAt: 10, viewerLogin: "octo", viewerId: 42 } as const;
     stored = envelope({
       accounts: {},
       connections: { github: [{ id: "gh-1", account: { platform: "github", auth: current, defaults: { owner: "o" } } }] },
       selectedConnectionIds: { github: "gh-1" },
     });
+    const before = structuredClone(stored);
     const saved = await writeStoredGithubOAuthTokens({ ...current, accessToken: "rotated", refreshToken: "r1", expiresAt: 999 }, "gh-1");
     expect(saved).toBe(true);
-    expect(readBack().state.accounts.github.auth.accessToken).toBe("rotated");
-    expect(readBack().state.connections.github[0].account.auth.accessToken).toBe("rotated");
-    expect(readBack().state.connections.github[0].account.defaults).toEqual({ owner: "o" });
+    expect(readBack()).toEqual(before);
+    const resolved = await resolveStoredGithubConnectionAuth("gh-1");
+    expect(resolved.status === "resolved" && resolved.auth).toMatchObject({ accessToken: "rotated", refreshToken: "r1", expiresAt: 999 });
   });
 
-  it("rebuilds a corrupt compatibility projection from the selected connection", async () => {
+  it("leaves a corrupt compatibility projection untouched while resolving the overlay", async () => {
     const current = { kind: "oauth", accessToken: "old", refreshToken: "r0", expiresAt: 1, tokenType: "bearer", scope: "repo", grantedAt: 10, viewerLogin: "octo", viewerId: 42 } as const;
     stored = envelope({
       accounts: "corrupt",
       connections: { github: [{ id: "gh-1", account: { platform: "github", auth: current, defaults: { owner: "o" } } }] },
       selectedConnectionIds: { github: "gh-1" },
     });
+    const before = structuredClone(stored);
     await expect(writeStoredGithubOAuthTokens({ ...current, accessToken: "rotated", refreshToken: "r1" }, "gh-1")).resolves.toBe(true);
-    expect(readBack().state.accounts.github.auth.accessToken).toBe("rotated");
-    expect(readBack().state.accounts.github.defaults).toEqual({ owner: "o" });
+    expect(readBack()).toEqual(before);
+    const resolved = await resolveStoredGithubConnectionAuth("gh-1");
+    expect(resolved.status === "resolved" && (resolved.auth as { accessToken: string }).accessToken).toBe("rotated");
   });
 
   it("serializes parallel writes to different connection IDs without losing either rotation", async () => {
@@ -219,8 +246,10 @@ describe("플랫폼별 write 계열 (토큰 갱신 영속)", () => {
       writeStoredGithubOAuthTokens({ ...first, accessToken: "a-new", refreshToken: "a-r1" } as any, "gh-1"),
       writeStoredGithubOAuthTokens({ ...second, accessToken: "b-new", refreshToken: "b-r1" } as any, "gh-2"),
     ]);
-    const connections = readBack().state.connections.github;
-    expect(connections.map((item: { account: { auth: { accessToken: string } } }) => item.account.auth.accessToken)).toEqual(["a-new", "b-new"]);
+    expect(readBack().state.connections.github.map((item: { account: { auth: { accessToken: string } } }) => item.account.auth.accessToken)).toEqual(["a-old", "b-old"]);
+    const [a, b] = await Promise.all([resolveStoredGithubConnectionAuth("gh-1"), resolveStoredGithubConnectionAuth("gh-2")]);
+    expect(a.status === "resolved" && (a.auth as { accessToken: string }).accessToken).toBe("a-new");
+    expect(b.status === "resolved" && (b.auth as { accessToken: string }).accessToken).toBe("b-new");
   });
 
   it("rejects a late refresh from an older grant without resurrecting replaced credentials", async () => {
@@ -246,18 +275,20 @@ describe("플랫폼별 write 계열 (토큰 갱신 영속)", () => {
 
   it("github: 응답에 refreshToken/expiresAt이 없으면 기존 값을 보존한다", async () => {
     stored = envelope({
-      accounts: { github: { auth: { kind: "oauth", accessToken: "old", refreshToken: "keep-me", expiresAt: 42 } } },
+      accounts: { github: { auth: { kind: "oauth", accessToken: "old", tokenType: "bearer", scope: "repo", refreshToken: "keep-me", expiresAt: 42, grantedAt: 1 } } },
     });
     await writeStoredGithubOAuthTokens({
       kind: "oauth",
       accessToken: "new",
       tokenType: "bearer",
       scope: "repo",
+      grantedAt: 1,
     } as any);
-    const auth = readBack().state.accounts.github.auth;
-    expect(auth.accessToken).toBe("new");
-    expect(auth.refreshToken).toBe("keep-me");
-    expect(auth.expiresAt).toBe(42);
+    const result = await resolveStoredGithubConnectionAuth();
+    const auth = result.status === "resolved" ? result.auth as unknown as Record<string, unknown> : undefined;
+    expect(auth?.accessToken).toBe("new");
+    expect(auth?.refreshToken).toBe("keep-me");
+    expect(auth?.expiresAt).toBe(42);
   });
 
   it.each([
@@ -266,10 +297,10 @@ describe("플랫폼별 write 계열 (토큰 갱신 영속)", () => {
     ["gitlab", writeStoredGitlabOAuthTokens],
   ] as const)("%s: scope도 갱신한다", async (platform, write) => {
     stored = envelope({
-      accounts: { [platform]: { auth: { kind: "oauth", accessToken: "old", refreshToken: "r0", expiresAt: 1, scope: "old-scope" } } },
+      accounts: { [platform]: { auth: { kind: "oauth", accessToken: "old", refreshToken: "r0", expiresAt: 1, scope: "old-scope", grantedAt: 1 } } },
     });
-    await write({ kind: "oauth", accessToken: "new", refreshToken: "r1", expiresAt: 999, scope: "new-scope", tokenType: "bearer" } as any);
-    expect(readBack().state.accounts[platform].auth.scope).toBe("new-scope");
+    await write({ kind: "oauth", accessToken: "new", refreshToken: "r1", expiresAt: 999, scope: "new-scope", tokenType: "bearer", grantedAt: 1 } as any);
+    expect((await effectiveConnectionAuth(platform))?.scope).toBe("new-scope");
   });
 
   // 각 write가 대입하는 필드 목록은 "갱신 대상 화이트리스트"다 — 나머지(신원 필드)는
@@ -295,7 +326,7 @@ describe("플랫폼별 write 계열 (토큰 갱신 영속)", () => {
     {
       platform: "github",
       write: writeStoredGithubOAuthTokens,
-      stored: { kind: "oauth", accessToken: "old", tokenType: "bearer", scope: "old-scope", refreshToken: "r0", expiresAt: 1, viewerLogin: "octocat" },
+      stored: { kind: "oauth", accessToken: "old", tokenType: "bearer", scope: "old-scope", refreshToken: "r0", expiresAt: 1, viewerLogin: "octocat", grantedAt: 777 },
       incoming: { kind: "oauth", accessToken: "new", tokenType: "mac", scope: "new-scope", refreshToken: "r1", expiresAt: 999, grantedAt: 777 },
       renewed: { accessToken: "new", tokenType: "mac", scope: "new-scope", refreshToken: "r1", expiresAt: 999 },
       absent: [],
@@ -303,7 +334,7 @@ describe("플랫폼별 write 계열 (토큰 갱신 영속)", () => {
     {
       platform: "linear",
       write: writeStoredLinearOAuthTokens,
-      stored: { kind: "oauth", accessToken: "old", refreshToken: "r0", expiresAt: 1, scope: "old-scope", viewerName: "me" },
+      stored: { kind: "oauth", accessToken: "old", refreshToken: "r0", expiresAt: 1, scope: "old-scope", viewerName: "me", grantedAt: 777 },
       incoming: { kind: "oauth", accessToken: "new", refreshToken: "r1", expiresAt: 999, scope: "new-scope", grantedAt: 777 },
       renewed: { accessToken: "new", refreshToken: "r1", expiresAt: 999, scope: "new-scope" },
       absent: ["tokenType"],
@@ -334,9 +365,13 @@ describe("플랫폼별 write 계열 (토큰 갱신 영속)", () => {
       await write(incoming as never);
 
       // 부분 일치가 아니라 정확 일치 — 목록이 넓어지면(신원 필드 대입) 여기서 갈린다.
-      expect(readBack()).toEqual(
-        envelope({ accounts: { [platform]: { auth: { ...seed, ...renewed } } } }),
-      );
+      const canonicalExpected = platform === "github" || platform === "linear"
+        ? envelope({ accounts: { [platform]: { auth: { ...seed } } } })
+        : envelope({ accounts: { [platform]: { auth: { ...seed, ...renewed } } } });
+      expect(readBack()).toEqual(canonicalExpected);
+      if (platform === "github" || platform === "linear") {
+        expect(await effectiveConnectionAuth(platform)).toMatchObject(renewed);
+      }
     },
   );
 
@@ -349,7 +384,7 @@ describe("플랫폼별 write 계열 (토큰 갱신 영속)", () => {
 
       await write({ ...incoming, scope: "leak", tokenType: "leak" } as never);
 
-      const auth = readBack().state.accounts[platform].auth;
+      const auth = (await effectiveConnectionAuth(platform)) as Record<string, unknown>;
       for (const key of absent) expect(key in auth, `${platform}.${key}`).toBe(false);
     },
   );
@@ -359,7 +394,7 @@ describe("플랫폼별 write 계열 (토큰 갱신 영속)", () => {
   // 토큰이 계속 쓰인다. 위 keepIfAbsent 케이스들은 undefined만 넣어서 이 축을 못 가른다.
   it("github: falsy지만 nullish가 아닌 값(''·0)은 그대로 덮어쓴다", async () => {
     stored = envelope({
-      accounts: { github: { auth: { kind: "oauth", accessToken: "old", tokenType: "bearer", scope: "s", refreshToken: "old-refresh", expiresAt: 42 } } },
+      accounts: { github: { auth: { kind: "oauth", accessToken: "old", tokenType: "bearer", scope: "s", refreshToken: "old-refresh", expiresAt: 42, grantedAt: 1 } } },
     });
 
     await writeStoredGithubOAuthTokens({
@@ -369,16 +404,18 @@ describe("플랫폼별 write 계열 (토큰 갱신 영속)", () => {
       scope: "s",
       refreshToken: "",
       expiresAt: 0,
+      grantedAt: 1,
     } as never);
 
-    const auth = readBack().state.accounts.github.auth;
-    expect(auth.refreshToken).toBe("");
-    expect(auth.expiresAt).toBe(0);
+    const result = await resolveStoredGithubConnectionAuth();
+    const auth = result.status === "resolved" ? result.auth as unknown as Record<string, unknown> : undefined;
+    expect(auth?.refreshToken).toBe("");
+    expect(auth?.expiresAt).toBe(0);
   });
 
   // `?? cur.X` 폴백은 github 전용이다. 나머지 4개로 번지면, 갱신 응답이 토큰 회전으로
   // refreshToken을 비운 경우 옛 값이 살아남아 다음 갱신이 만료된 토큰으로 나간다.
-  it.each(WHITELIST.filter((c) => c.platform !== "github"))(
+  it.each(WHITELIST.filter((c) => c.platform !== "github" && c.platform !== "linear"))(
     "$platform: 응답에 refreshToken이 없으면 지운다 (keepIfAbsent는 github 전용)",
     async ({ platform, write, stored: seed, incoming }) => {
       stored = envelope({ accounts: { [platform]: { auth: { ...seed } } } });
@@ -396,12 +433,12 @@ describe("플랫폼별 write 계열 (토큰 갱신 영속)", () => {
   it.each(cases)("%s: 문자열로 저장돼 있었다면 문자열로 돌려쓴다", async (platform, write) => {
     stored = JSON.stringify(
       envelope({
-        accounts: { [platform]: { auth: { kind: "oauth", accessToken: "old", refreshToken: "r0", expiresAt: 1 } } },
+        accounts: { [platform]: { auth: { kind: "oauth", accessToken: "old", refreshToken: "r0", expiresAt: 1, grantedAt: 1 } } },
       }),
     );
-    await write({ kind: "oauth", accessToken: "new", refreshToken: "r1", expiresAt: 999 } as any);
+    await write({ kind: "oauth", accessToken: "new", refreshToken: "r1", expiresAt: 999, grantedAt: 1, tokenType: "bearer", scope: "scope" } as any);
     expect(typeof stored).toBe("string");
-    expect(readBack().state.accounts[platform].auth.accessToken).toBe("new");
+    expect((await effectiveConnectionAuth(platform))?.accessToken).toBe("new");
   });
 });
 
@@ -542,7 +579,7 @@ describe("sameAuthIdentity — 스칼라가 아닌 값", () => {
 });
 
 describe("connection-scoped OAuth storage", () => {
-  it("legacy selected refresh keeps its connection auth and compatibility projection in sync", async () => {
+  it("legacy selected refresh keeps canonical settings untouched and exposes the overlay", async () => {
     const original = { kind: "oauth", accessToken: "old", tokenType: "bearer", scope: "repo", refreshToken: "r0", expiresAt: 1, viewerLogin: "octo", grantedAt: 10 };
     stored = envelope({
       accounts: { github: { auth: structuredClone(original) } },
@@ -551,9 +588,11 @@ describe("connection-scoped OAuth storage", () => {
     });
     await writeStoredGithubOAuthTokens({ ...original, accessToken: "new", refreshToken: "r1", expiresAt: 2 } as never);
     const state = readBack().state;
-    expect(state.connections.github[0].account.auth).toEqual(state.accounts.github.auth);
-    expect(state.connections.github[0].account.auth).toMatchObject({ accessToken: "new", refreshToken: "r1", expiresAt: 2 });
+    expect(state.connections.github[0].account.auth).toEqual(original);
+    expect(state.accounts.github.auth).toEqual(original);
     expect(state.connections.github[0].account.defaults).toEqual({ repo: "mono" });
+    const resolved = await resolveStoredGithubConnectionAuth();
+    expect(resolved.status === "resolved" && resolved.auth).toMatchObject({ accessToken: "new", refreshToken: "r1", expiresAt: 2 });
   });
 
   it("legacy refresh without stable identity is a no-op when multiple connections exist", async () => {
@@ -585,6 +624,75 @@ describe("connection-scoped OAuth storage", () => {
     const state = readBack().state;
     expect(state.connections.github[0].account.auth.accessToken).toBe("selected");
     expect(state.accounts.github.auth.accessToken).toBe("selected");
-    expect(state.connections.github[1].account.auth.accessToken).toBe("rotated");
+    expect(state.connections.github[1].account.auth.accessToken).toBe("other");
+    const resolved = await resolveStoredGithubConnectionAuth("gh-other");
+    expect(resolved.status === "resolved" && (resolved.auth as { accessToken: string }).accessToken).toBe("rotated");
+  });
+
+  const gh = (accessToken: string, refreshToken: string, grantedAt = 10) => ({ kind: "oauth" as const, accessToken, tokenType: "bearer", scope: "repo", refreshToken, expiresAt: 100, viewerLogin: "octo", viewerId: 42, grantedAt });
+  const ghState = (auth: ReturnType<typeof gh>) => envelope({ accounts: { github: { auth } }, connections: { github: [{ id: "gh-1", account: { auth } }] }, selectedConnectionIds: { github: "gh-1" } });
+
+  it("sidepanel deletion between overlay refresh and commit cannot resurrect the connection", async () => {
+    const original = gh("old", "r0");
+    stored = ghState(original);
+    beforeOverlaySet = () => { stored = envelope({ accounts: {}, connections: { github: [] }, selectedConnectionIds: {} }); };
+    await expect(writeStoredGithubOAuthTokens({ ...original, accessToken: "rotated", refreshToken: "r1" }, "gh-1")).resolves.toBe(false);
+    expect(readBack().state.connections.github).toEqual([]);
+    expect(overlayStored).toBeUndefined();
+    expect((await resolveStoredGithubConnectionAuth("gh-1")).status).toBe("unknown");
+  });
+
+  it("a reconnect arriving during refresh rejects and removes the old grant overlay", async () => {
+    const original = gh("old", "r0");
+    const newGrant = gh("new-grant", "new-r", 20);
+    stored = ghState(original);
+    beforeOverlaySet = () => { stored = ghState(newGrant); };
+    await expect(writeStoredGithubOAuthTokens({ ...original, accessToken: "late-rotation", refreshToken: "late-r" }, "gh-1")).resolves.toBe(false);
+    expect(overlayStored).toBeUndefined();
+    const resolved = await resolveStoredGithubConnectionAuth("gh-1");
+    expect(resolved.status === "resolved" && resolved.auth).toMatchObject({ accessToken: "new-grant", refreshToken: "new-r", grantedAt: 20 });
+  });
+
+  it("a later whole-envelope sidepanel persist cannot lose the background token rotation", async () => {
+    const original = gh("old", "r0");
+    stored = ghState(original);
+    await expect(writeStoredGithubOAuthTokens({ ...original, accessToken: "rotated", refreshToken: "r1" }, "gh-1")).resolves.toBe(true);
+    stored = envelope({ ...readBack().state, titlePrefix: "edited", connections: { github: [{ id: "gh-1", account: { auth: original } }] } });
+    const resolved = await resolveStoredGithubConnectionAuth("gh-1");
+    expect(resolved.status === "resolved" && resolved.auth).toMatchObject({ accessToken: "rotated", refreshToken: "r1" });
+    expect(readBack().state.titlePrefix).toBe("edited");
+  });
+
+  it("reconnect, removal, reset, and startup reconciliation prune stale overlays", async () => {
+    const oldGrant = gh("old", "r0");
+    stored = ghState(oldGrant);
+    await writeStoredGithubOAuthTokens({ ...oldGrant, accessToken: "rotated", refreshToken: "r1" }, "gh-1");
+    stored = ghState(gh("new-grant", "new-r", 20));
+    await reconcileConnectionTokenOverlays();
+    expect(overlayStored).toBeUndefined();
+    const afterReconnect = await resolveStoredGithubConnectionAuth("gh-1");
+    expect(afterReconnect.status === "resolved" && afterReconnect.auth).toMatchObject({ accessToken: "new-grant", refreshToken: "new-r" });
+
+    const newGrant = gh("new-grant", "new-r", 20);
+    await writeStoredGithubOAuthTokens({ ...newGrant, accessToken: "rotated-again", refreshToken: "new-r2" }, "gh-1");
+    stored = envelope({ accounts: {}, connections: { github: [] }, selectedConnectionIds: {} });
+    await reconcileConnectionTokenOverlays();
+    expect(overlayStored).toBeUndefined();
+
+    stored = ghState(newGrant);
+    await writeStoredGithubOAuthTokens({ ...newGrant, accessToken: "rotated", refreshToken: "new-r2" }, "gh-1");
+    stored = undefined;
+    await reconcileConnectionTokenOverlays();
+    expect(overlayStored).toBeUndefined();
+  });
+
+  it("legacy overlay survives migration to the same legacy connection id", async () => {
+    const original = gh("old", "r0");
+    stored = envelope({ accounts: { github: { auth: original } } });
+    await writeStoredGithubOAuthTokens({ ...original, accessToken: "rotated", refreshToken: "r1" });
+    stored = envelope({ accounts: { github: { auth: original } }, connections: { github: [{ id: "legacy-github", account: { auth: original } }] }, selectedConnectionIds: { github: "legacy-github" } });
+    await reconcileConnectionTokenOverlays();
+    const resolved = await resolveStoredGithubConnectionAuth("legacy-github");
+    expect(resolved.status === "resolved" && resolved.auth).toMatchObject({ accessToken: "rotated", refreshToken: "r1" });
   });
 });

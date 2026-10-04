@@ -210,10 +210,11 @@ async function refreshOnceWithLock(auth: LinearAuth): Promise<LinearAuth> {
   const connectionId = connectionIdFromAuth(auth) ?? "legacy-linear";
   const grant = oauthGrantIdentity(auth);
   return refreshFlights(connectionId, grant, async () => {
-    const storedResult = await resolveStoredLinearConnectionAuth(connectionId).catch(() => ({ status: "missing" as const }));
-    const stored = storedResult.status === "resolved" ? storedResult.auth : null;
-    const sameGrant = stored?.kind === "oauth" && oauthGrantIdentity(stored) === grant;
-    const rotated = sameGrant ? pickRotatedAuth(auth, stored) : null;
+    const storedResult = await resolveStoredLinearConnectionAuth(connectionId);
+    if (storedResult.status !== "resolved" || storedResult.auth.kind !== "oauth" || oauthGrantIdentity(storedResult.auth) !== grant) {
+      throw new Error("Linear connection changed during token refresh; retry with the current connection.");
+    }
+    const rotated = pickRotatedAuth(auth, storedResult.auth);
     if (rotated) return bindConnectionId(rotated, connectionId);
     return refreshLinearToken(bindConnectionId(auth, connectionId));
   });

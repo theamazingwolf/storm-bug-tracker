@@ -5,6 +5,7 @@ import { isSupportedUrl } from "@/lib/url-support";
 import { handleMessage } from "./messages";
 import { BG_REQUEST_TYPES } from "./bgRequestTypes";
 import { serializePlatformError } from "./platformErrors";
+import { setupConnectionTokenOverlayCleanup } from "@/lib/settings-storage";
 import { captureEvent } from "./analytics";
 import { OAuthError, serializeOAuthError } from "./oauth";
 import { pruneOrphanPendingLogsOncePerSession } from "@/lib/pending-log-prune";
@@ -14,6 +15,7 @@ import { activateTab, setupTabBindings, shouldPreserveSession, stopRecorders } f
 
 initBgLocale();
 void pruneOrphanPendingLogsOncePerSession();
+setupConnectionTokenOverlayCleanup();
 
 function friendlyError(error: unknown): string {
   if (error instanceof TypeError && error.message === "Failed to fetch") {

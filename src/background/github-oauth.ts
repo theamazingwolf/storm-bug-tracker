@@ -209,10 +209,11 @@ async function refreshOnceWithLock(auth: GithubAuth): Promise<GithubAuth> {
   return refreshFlights(connectionId, grant, async () => {
     // Re-read only the captured connection. A selection change cannot redirect this operation,
     // and a replacement grant must not be mistaken for a completed rotation.
-    const storedResult = await resolveStoredGithubConnectionAuth(connectionId).catch(() => ({ status: "missing" as const }));
-    const stored = storedResult.status === "resolved" ? storedResult.auth : null;
-    const sameGrant = stored?.kind === "oauth" && oauthGrantIdentity(stored) === grant;
-    const rotated = sameGrant ? pickRotatedAuth(auth, stored) : null;
+    const storedResult = await resolveStoredGithubConnectionAuth(connectionId);
+    if (storedResult.status !== "resolved" || storedResult.auth.kind !== "oauth" || oauthGrantIdentity(storedResult.auth) !== grant) {
+      throw new Error("GitHub connection changed during token refresh; retry with the current connection.");
+    }
+    const rotated = pickRotatedAuth(auth, storedResult.auth);
     if (rotated) return bindConnectionId(rotated, connectionId);
     return refreshGithubToken(bindConnectionId(auth, connectionId));
   });

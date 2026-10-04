@@ -38,3 +38,28 @@ it.each([413, 401, 403, 429, 504])("serialized GitHub policy HTTP %s preserves s
   expect(results[0]).toMatchObject({ fileId: "logs", ok: false, failure: { stage: "upload", httpStatus: status } });
   expect(JSON.stringify(results)).not.toContain("private");
 });
+
+it.each([
+  { stage: "policy", status: 401 },
+  { stage: "policy", status: 403 },
+  { stage: "finalize", status: 401 },
+  { stage: "finalize", status: 403 },
+] as const)("GitHub $stage HTTP $status is an authentication failure for the remaining batch", async ({ stage, status }) => {
+  const fetch = vi.fn(async (url: string) => {
+    if (url.includes("policies")) {
+      if (stage === "policy") return { ok: false, status, text: async () => "private response" };
+      return { ok: true, status: 200, json: async () => ({ form: {}, upload_url: "https://upload.example/bytes", asset_upload_url: "/finalize", asset_upload_authenticity_token: "secret", asset: { href: "https://github.com/user-attachments/assets/file" } }) };
+    }
+    if (url.includes("upload.example")) return { ok: true, status: 200 };
+    return { ok: false, status, text: async () => "private response" };
+  });
+  vi.stubGlobal("chrome", {
+    tabs: { create: async () => ({ id: 1 }), remove: async () => {}, onUpdated: { addListener: (fn: (id: number, info: { status: string }) => void) => queueMicrotask(() => fn(1, { status: "complete" })), removeListener: () => {} } },
+    scripting: { executeScript: async ({ func, args }: { func: Function; args: unknown[] }) => [{ result: await runInNewContext(`(${func.toString()})`, { fetch, atob, Blob, FormData, Uint8Array, URL, location: { origin: "https://github.com" }, document: { querySelector: () => ({ getAttribute: () => "octo" }) } })(...args) }] },
+  });
+  const files = ["first", "second"].map((fileId) => ({ fileId, filename: `${fileId}.png`, contentType: "image/png", dataUrl: "data:image/png;base64,QQ==" }));
+  const results = await uploadGithubFiles("o", "r", 1, files, "octo");
+  expect(results).toEqual(files.map((file) => ({ fileId: file.fileId, filename: file.filename, ok: false, failure: { stage: "upload", code: "authentication", httpStatus: status } })));
+  expect(fetch.mock.calls.filter(([url]) => String(url).includes("policies"))).toHaveLength(1);
+  expect(JSON.stringify(results)).not.toContain("private");
+});

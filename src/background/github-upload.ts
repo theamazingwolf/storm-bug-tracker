@@ -44,7 +44,7 @@ async function ensureGithubTab(owner: string, repo: string): Promise<{ tabId: nu
 }
 
 interface PageUploadResult {
-  files: Array<{ fileId?: string; status?: number; name?: string; filename: string; href: string | null }>;
+  files: Array<{ fileId?: string; status?: number; name?: string; filename: string; href: string | null; authFailure?: boolean }>;
   debug: string[];
   identityFailure?: boolean;
 }
@@ -59,7 +59,7 @@ async function pageBatchUploadFn(
 ): Promise<PageUploadResult> {
   async function uploadOne(
     file: { fileId?: string; filename: string; contentType: string; dataUrl: string },
-  ): Promise<{ fileId?: string; status?: number; name?: string; filename: string; href: string | null; debug: string[] }> {
+  ): Promise<{ fileId?: string; status?: number; name?: string; filename: string; href: string | null; authFailure?: boolean; debug: string[] }> {
     const debug: string[] = [];
     try {
       const idx = file.dataUrl.indexOf(";base64,");
@@ -87,7 +87,7 @@ async function pageBatchUploadFn(
       if (!policyRes.ok) {
         const body = await policyRes.text().catch(() => "");
         debug.push(`${file.filename}: policy ${policyRes.status} ${body.substring(0, 200)}`);
-        return { ...(file.fileId ? { fileId: file.fileId } : {}), filename: file.filename, href: null, status: policyRes.status, debug };
+        return { ...(file.fileId ? { fileId: file.fileId } : {}), filename: file.filename, href: null, status: policyRes.status, ...([401, 403].includes(policyRes.status) ? { authFailure: true } : {}), debug };
       }
       const policy = await policyRes.json();
       debug.push(`${file.filename}: policy ok, upload_url=${policy.upload_url?.substring(0, 80)}`);
@@ -120,7 +120,7 @@ async function pageBatchUploadFn(
       });
       if (!finalRes.ok) {
         debug.push(`${file.filename}: finalize ${finalRes.status}`);
-        return { ...(file.fileId ? { fileId: file.fileId } : {}), filename: file.filename, href: null, status: finalRes.status, debug };
+        return { ...(file.fileId ? { fileId: file.fileId } : {}), filename: file.filename, href: null, status: finalRes.status, ...([401, 403].includes(finalRes.status) ? { authFailure: true } : {}), debug };
       }
       debug.push(`${file.filename}: success href=${policy.asset.href}`);
       return { ...(file.fileId ? { fileId: file.fileId } : {}), filename: file.filename, href: policy.asset.href as string, debug };
@@ -131,6 +131,9 @@ async function pageBatchUploadFn(
     }
   }
 
+  // This is a best-effort preflight, not an atomic identity binding: the GitHub tab session can
+  // change after this check and before policy/finalize. Those authenticated 401/403 responses
+  // stop the remainder of the batch and are surfaced as authentication failures.
   const sessionLogin = document.querySelector('meta[name="user-login"]')?.getAttribute("content")?.trim();
   if (!expectedLogin || !sessionLogin || sessionLogin.toLowerCase() !== expectedLogin.toLowerCase()) {
     return {
@@ -139,10 +142,24 @@ async function pageBatchUploadFn(
       debug: ["GitHub browser session could not be verified for the connected account; no files were uploaded."],
     };
   }
-  const settled = await Promise.all(files.map((f) => uploadOne(f)));
+  const settled: Awaited<ReturnType<typeof uploadOne>>[] = [];
+  let identityFailure = false;
+  for (const [index, file] of files.entries()) {
+    const result = await uploadOne(file);
+    settled.push(result);
+    if (!result.authFailure) continue;
+    identityFailure = true;
+    // Once GitHub rejects an authenticated policy/finalize request, do not send more files in
+    // this batch. Earlier successful files remain successes to avoid duplicate fallback uploads.
+    for (const remaining of files.slice(index + 1)) {
+      settled.push({ ...(remaining.fileId ? { fileId: remaining.fileId } : {}), filename: remaining.filename, href: null, status: result.status, authFailure: true, debug: [] });
+    }
+    break;
+  }
   return {
-    files: settled.map((r) => ({ ...(r.fileId ? { fileId: r.fileId } : {}), filename: r.filename, href: r.href, ...(r.status ? { status: r.status } : {}), ...(r.name ? { name: r.name } : {}) })),
+    files: settled.map((r) => ({ ...(r.fileId ? { fileId: r.fileId } : {}), filename: r.filename, href: r.href, ...(r.status ? { status: r.status } : {}), ...(r.name ? { name: r.name } : {}), ...(r.authFailure ? { authFailure: true } : {}) })),
     debug: settled.flatMap((r) => r.debug),
+    ...(identityFailure ? { identityFailure: true } : {}),
   };
 }
 
@@ -184,12 +201,10 @@ export async function uploadGithubFiles(
     }
     if (!pageResult) return allFailed();
     if (pageResult.identityFailure) {
-      return files.map((file) => ({
-        ok: false as const,
-        ...(file.fileId ? { fileId: file.fileId } : {}),
-        filename: file.filename,
-        failure: { stage: "upload" as const, code: "authentication" as const },
-      }));
+      return pageResult.files.map((file) => file.href
+        ? { ok: true as const, ...(file.fileId ? { fileId: file.fileId } : {}), filename: file.filename, href: file.href }
+        : { ok: false as const, ...(file.fileId ? { fileId: file.fileId } : {}), filename: file.filename,
+            failure: { stage: "upload" as const, code: "authentication" as const, ...(file.status ? { httpStatus: file.status } : {}) } });
     }
     return pageResult.files.map((f) =>
       f.href

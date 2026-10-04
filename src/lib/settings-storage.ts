@@ -1,6 +1,6 @@
 import type { JiraAuth } from "@/types/jira";
-import type { GithubAuth } from "@/types/github";
-import type { LinearAuth } from "@/types/linear";
+import type { GithubAuth, GithubOAuthAuth } from "@/types/github";
+import type { LinearAuth, LinearOAuthAuth } from "@/types/linear";
 import type { NotionAuth } from "@/types/notion";
 import type { GitlabAuth } from "@/types/gitlab";
 import type { AsanaAuth } from "@/types/asana";
@@ -9,6 +9,28 @@ import type { SlackAuth } from "@/types/slack";
 import type { WebhookAuth } from "@/types/webhook";
 
 export const SETTINGS_STORAGE_KEY = "bugshot-settings";
+export const CONNECTION_TOKEN_OVERLAY_STORAGE_KEY = "bugshot-connection-token-overlays";
+
+interface GithubTokenOverlay {
+  platform: "github";
+  connectionId: string;
+  grantedAt: number;
+  viewerId?: number;
+  tokens: Pick<GithubOAuthAuth, "accessToken" | "tokenType" | "scope"> & Partial<Pick<GithubOAuthAuth, "refreshToken" | "expiresAt">>;
+}
+
+interface LinearTokenOverlay {
+  platform: "linear";
+  connectionId: string;
+  grantedAt: number;
+  viewerId?: string;
+  tokens: Pick<LinearOAuthAuth, "accessToken" | "refreshToken" | "expiresAt" | "scope">;
+}
+
+interface ConnectionTokenOverlays {
+  github?: GithubTokenOverlay[];
+  linear?: LinearTokenOverlay[];
+}
 
 interface SettingsEnvelope {
   state?: {
@@ -151,6 +173,9 @@ function writer<K extends OAuthAccountKey, A extends OAuthAuthOf<K>>(
   spec: OAuthWriteSpec<K, A>,
 ): (auth: A, connectionId?: string) => Promise<boolean> {
   return (auth, connectionId) => serializeOAuthStorageWrite(async () => {
+    if (spec.account === "github" || spec.account === "linear") {
+      return writeConnectionTokenOverlay(spec.account, auth as ConnectionAuth, connectionId, spec.fields, spec.keepIfAbsent);
+    }
     const { raw, envelope } = await readEnvelope();
     const state = envelope?.state;
     const routeKey = spec.account === "github" || spec.account === "linear" ? spec.account as "github" | "linear" : undefined;
@@ -227,57 +252,238 @@ export type StoredConnectionAuthResolution<A, O = never> =
   | { status: "resolved"; connectionId: string; auth: A; organization?: O }
   | { status: "ambiguous" | "missing" | "unknown" };
 
-export async function resolveStoredGithubConnectionAuth(
-  connectionId?: string,
-): Promise<StoredConnectionAuthResolution<GithubAuth>> {
-  const { envelope } = await readEnvelope();
-  const state = envelope?.state;
-  const records = state?.connections?.github;
-  if (connectionId) {
-    const record = records?.find((item) => item.id === connectionId);
-    if (record?.account.auth) return { status: "resolved", connectionId, auth: record.account.auth };
-    if (!records && connectionId === "legacy-github" && state?.accounts?.github?.auth) {
-      return { status: "resolved", connectionId, auth: state.accounts.github.auth };
-    }
-    return { status: "unknown" };
-  }
-  if (records) {
-    if (records.length > 1) return { status: "ambiguous" };
-    const selectedId = state?.selectedConnectionIds?.github;
-    const record = selectedId ? records.find((item) => item.id === selectedId) : undefined;
-    return record?.account.auth
-      ? { status: "resolved", connectionId: record.id, auth: record.account.auth }
-      : { status: "missing" };
-  }
-  const auth = state?.accounts?.github?.auth;
-  return auth ? { status: "resolved", connectionId: "legacy-github", auth } : { status: "missing" };
+type ConnectionPlatform = "github" | "linear";
+type ConnectionAuth = GithubAuth | LinearAuth;
+type ConnectionResolution = StoredConnectionAuthResolution<ConnectionAuth, { id: string; name: string }>;
+interface TokenGrantBinding {
+  platform: ConnectionPlatform;
+  connectionId: string;
+  grantedAt: number;
+  viewerId?: string | number;
 }
 
-export async function resolveStoredLinearConnectionAuth(
+function resolveCanonicalConnectionAuth(
+  platform: ConnectionPlatform,
   connectionId?: string,
-): Promise<StoredConnectionAuthResolution<LinearAuth, { id: string; name: string }>> {
-  const { envelope } = await readEnvelope();
-  const state = envelope?.state;
-  const records = state?.connections?.linear;
-  if (connectionId) {
-    const record = records?.find((item) => item.id === connectionId);
-    if (record?.account.auth) return { status: "resolved", connectionId, auth: record.account.auth, ...(record.organization ? { organization: record.organization } : {}) };
-    if (!records && connectionId === "legacy-linear" && state?.accounts?.linear?.auth) {
-      return { status: "resolved", connectionId, auth: state.accounts.linear.auth };
+): Promise<ConnectionResolution> {
+  return readEnvelope().then(({ envelope }) => {
+    const state = envelope?.state;
+    const records = state?.connections?.[platform] as Array<{
+      id: string; account: { auth?: ConnectionAuth }; organization?: { id: string; name: string };
+    }> | undefined;
+    if (connectionId) {
+      const record = records?.find((item) => item.id === connectionId);
+      if (record?.account.auth) return { status: "resolved", connectionId, auth: record.account.auth, ...(record.organization ? { organization: record.organization } : {}) };
+      const legacyId = `legacy-${platform}`;
+      const legacyAuth = state?.accounts?.[platform]?.auth as ConnectionAuth | undefined;
+      if (!records && connectionId === legacyId && legacyAuth) return { status: "resolved", connectionId, auth: legacyAuth };
+      return { status: "unknown" };
     }
-    return { status: "unknown" };
-  }
-  if (records) {
-    if (records.length > 1) return { status: "ambiguous" };
-    const selectedId = state?.selectedConnectionIds?.linear;
-    const record = selectedId ? records.find((item) => item.id === selectedId) : undefined;
-    return record?.account.auth
-      ? { status: "resolved", connectionId: record.id, auth: record.account.auth, ...(record.organization ? { organization: record.organization } : {}) }
-      : { status: "missing" };
-  }
-  const auth = state?.accounts?.linear?.auth;
-  return auth ? { status: "resolved", connectionId: "legacy-linear", auth } : { status: "missing" };
+    if (records) {
+      if (records.length > 1) return { status: "ambiguous" };
+      const selectedId = state?.selectedConnectionIds?.[platform];
+      const record = selectedId ? records.find((item) => item.id === selectedId) : undefined;
+      return record?.account.auth
+        ? { status: "resolved", connectionId: record.id, auth: record.account.auth, ...(record.organization ? { organization: record.organization } : {}) }
+        : { status: "missing" };
+    }
+    const auth = state?.accounts?.[platform]?.auth as ConnectionAuth | undefined;
+    return auth ? { status: "resolved", connectionId: `legacy-${platform}`, auth } : { status: "missing" };
+  });
 }
+
+function tokenGrantBinding(platform: ConnectionPlatform, connectionId: string, auth: ConnectionAuth): TokenGrantBinding | null {
+  if (auth.kind !== "oauth" || !Number.isFinite(auth.grantedAt)) return null;
+  if (platform === "github") {
+    if (auth.viewerId != null && typeof auth.viewerId !== "number") return null;
+    return { platform, connectionId, grantedAt: auth.grantedAt, ...(auth.viewerId != null ? { viewerId: auth.viewerId } : {}) };
+  }
+  if (auth.viewerId != null && typeof auth.viewerId !== "string") return null;
+  return { platform, connectionId, grantedAt: auth.grantedAt, ...(auth.viewerId != null ? { viewerId: auth.viewerId } : {}) };
+}
+
+function sameTokenGrant(a: TokenGrantBinding | null, b: TokenGrantBinding | null): boolean {
+  return !!a && !!b && a.platform === b.platform && a.connectionId === b.connectionId && a.grantedAt === b.grantedAt &&
+    (a.viewerId == null || b.viewerId == null || a.viewerId === b.viewerId);
+}
+
+function parseTokenOverlays(raw: unknown): ConnectionTokenOverlays {
+  let value = raw;
+  if (typeof value === "string") {
+    try { value = JSON.parse(value); } catch { return {}; }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const source = value as Record<string, unknown>;
+  return {
+    github: Array.isArray(source.github) ? source.github as GithubTokenOverlay[] : [],
+    linear: Array.isArray(source.linear) ? source.linear as LinearTokenOverlay[] : [],
+  };
+}
+
+async function readTokenOverlays(): Promise<ConnectionTokenOverlays> {
+  const stored = await chrome.storage.local.get(CONNECTION_TOKEN_OVERLAY_STORAGE_KEY);
+  return parseTokenOverlays(stored[CONNECTION_TOKEN_OVERLAY_STORAGE_KEY]);
+}
+
+function validOverlayBinding(platform: ConnectionPlatform, entry: unknown): entry is GithubTokenOverlay | LinearTokenOverlay {
+  if (!entry || typeof entry !== "object") return false;
+  const value = entry as Record<string, unknown>;
+  if (value.platform !== platform || typeof value.connectionId !== "string" || !Number.isFinite(value.grantedAt)) return false;
+  if (platform === "github" && value.viewerId != null && typeof value.viewerId !== "number") return false;
+  if (platform === "linear" && value.viewerId != null && typeof value.viewerId !== "string") return false;
+  if (!value.tokens || typeof value.tokens !== "object") return false;
+  const tokens = value.tokens as Record<string, unknown>;
+  if (typeof tokens.accessToken !== "string" || !tokens.accessToken) return false;
+  if (platform === "github") {
+    return typeof tokens.tokenType === "string" && typeof tokens.scope === "string" &&
+      (tokens.refreshToken == null || typeof tokens.refreshToken === "string") &&
+      (tokens.expiresAt == null || typeof tokens.expiresAt === "number");
+  }
+  return typeof tokens.refreshToken === "string" && typeof tokens.expiresAt === "number" && typeof tokens.scope === "string";
+}
+
+function overlayBinding(entry: GithubTokenOverlay | LinearTokenOverlay): TokenGrantBinding {
+  return { platform: entry.platform, connectionId: entry.connectionId, grantedAt: entry.grantedAt, ...(entry.viewerId != null ? { viewerId: entry.viewerId } : {}) };
+}
+
+function applyTokenOverlay(auth: ConnectionAuth, entry: GithubTokenOverlay | LinearTokenOverlay): ConnectionAuth {
+  if (entry.platform === "github") {
+    return { ...auth, accessToken: entry.tokens.accessToken, tokenType: entry.tokens.tokenType, scope: entry.tokens.scope,
+      ...(entry.tokens.refreshToken != null ? { refreshToken: entry.tokens.refreshToken } : {}),
+      ...(entry.tokens.expiresAt != null ? { expiresAt: entry.tokens.expiresAt } : {}) } as GithubOAuthAuth;
+  }
+  return { ...auth, accessToken: entry.tokens.accessToken, refreshToken: entry.tokens.refreshToken, expiresAt: entry.tokens.expiresAt, scope: entry.tokens.scope } as LinearOAuthAuth;
+}
+
+async function resolveStoredConnectionAuth(platform: ConnectionPlatform, connectionId?: string): Promise<ConnectionResolution> {
+  const initial = await resolveCanonicalConnectionAuth(platform, connectionId);
+  if (initial.status !== "resolved") return initial;
+  const overlays = await readTokenOverlays();
+  // Re-read after the asynchronous overlay access. If the canonical grant changed, return only
+  // the current canonical auth; never pair a stale envelope snapshot with an overlay.
+  const current = await resolveCanonicalConnectionAuth(platform, connectionId);
+  if (current.status !== "resolved") return current;
+  const initialBinding = tokenGrantBinding(platform, initial.connectionId, initial.auth);
+  const currentBinding = tokenGrantBinding(platform, current.connectionId, current.auth);
+  if (!sameTokenGrant(initialBinding, currentBinding)) return current;
+  const entry = overlays[platform]?.find((candidate) => validOverlayBinding(platform, candidate) && sameTokenGrant(overlayBinding(candidate), currentBinding));
+  if (!entry) return current;
+  return { ...current, auth: applyTokenOverlay(current.auth, entry) };
+}
+
+export async function resolveStoredGithubConnectionAuth(connectionId?: string): Promise<StoredConnectionAuthResolution<GithubAuth>> {
+  const result = await resolveStoredConnectionAuth("github", connectionId);
+  return result.status === "resolved" ? { status: "resolved", connectionId: result.connectionId, auth: result.auth as GithubAuth } : result;
+}
+
+export async function resolveStoredLinearConnectionAuth(connectionId?: string): Promise<StoredConnectionAuthResolution<LinearAuth, { id: string; name: string }>> {
+  const result = await resolveStoredConnectionAuth("linear", connectionId);
+  return result.status === "resolved"
+    ? { status: "resolved", connectionId: result.connectionId, auth: result.auth as LinearAuth, ...(result.organization ? { organization: result.organization } : {}) }
+    : result;
+}
+
+function liveGrantBindings(envelope: SettingsEnvelope | null): Record<ConnectionPlatform, Map<string, TokenGrantBinding>> {
+  const live: Record<ConnectionPlatform, Map<string, TokenGrantBinding>> = { github: new Map(), linear: new Map() };
+  for (const platform of ["github", "linear"] as const) {
+    const records = envelope?.state?.connections?.[platform] as Array<{ id: string; account: { auth?: ConnectionAuth } }> | undefined;
+    if (records) {
+      for (const record of records) {
+        const binding = record.account.auth && tokenGrantBinding(platform, record.id, record.account.auth);
+        if (binding) live[platform].set(record.id, binding);
+      }
+      continue;
+    }
+    const auth = envelope?.state?.accounts?.[platform]?.auth as ConnectionAuth | undefined;
+    const binding = auth && tokenGrantBinding(platform, `legacy-${platform}`, auth);
+    if (binding) live[platform].set(`legacy-${platform}`, binding);
+  }
+  return live;
+}
+
+function overlaysContainAny(overlays: ConnectionTokenOverlays): boolean {
+  return (overlays.github?.length ?? 0) > 0 || (overlays.linear?.length ?? 0) > 0;
+}
+
+async function removeOverlayBinding(platform: ConnectionPlatform, binding: TokenGrantBinding): Promise<void> {
+  const overlays = await readTokenOverlays();
+  const retained = (overlays[platform] ?? []).filter((entry) => !validOverlayBinding(platform, entry) || !sameTokenGrant(overlayBinding(entry), binding));
+  const next = { ...overlays, [platform]: retained };
+  if (!overlaysContainAny(next)) await chrome.storage.local.remove(CONNECTION_TOKEN_OVERLAY_STORAGE_KEY);
+  else await chrome.storage.local.set({ [CONNECTION_TOKEN_OVERLAY_STORAGE_KEY]: next });
+}
+
+async function writeConnectionTokenOverlay(
+  platform: ConnectionPlatform,
+  incoming: ConnectionAuth,
+  connectionId: string | undefined,
+  fields: readonly string[],
+  keepIfAbsent?: readonly string[],
+): Promise<boolean> {
+  const current = await resolveCanonicalConnectionAuth(platform, connectionId);
+  if (current.status !== "resolved" || current.auth.kind !== "oauth" || incoming.kind !== "oauth") return false;
+  const binding = tokenGrantBinding(platform, current.connectionId, current.auth);
+  const requestedBinding = tokenGrantBinding(platform, current.connectionId, incoming);
+  if (!sameTokenGrant(binding, requestedBinding)) return false;
+
+  const overlays = await readTokenOverlays();
+  const prior = (overlays[platform] ?? []).find((entry) => validOverlayBinding(platform, entry) && sameTokenGrant(overlayBinding(entry), binding));
+  const currentTokens = current.auth as unknown as Record<string, unknown>;
+  const incomingTokens = incoming as unknown as Record<string, unknown>;
+  const priorTokens = prior?.tokens as unknown as Record<string, unknown> | undefined;
+  const tokens: Record<string, unknown> = {};
+  for (const field of fields) {
+    const value = incomingTokens[field];
+    const fallback = priorTokens?.[field] ?? currentTokens[field];
+    const next = keepIfAbsent?.includes(field) ? value ?? fallback : value;
+    if (next !== undefined) tokens[field] = next;
+  }
+  if (typeof tokens.accessToken !== "string" || !tokens.accessToken) return false;
+
+  const entry = {
+    platform,
+    connectionId: current.connectionId,
+    grantedAt: binding!.grantedAt,
+    ...(binding!.viewerId != null ? { viewerId: binding!.viewerId } : {}),
+    tokens,
+  } as GithubTokenOverlay | LinearTokenOverlay;
+  const retained = (overlays[platform] ?? []).filter((candidate) => candidate.connectionId !== current.connectionId);
+  const next: ConnectionTokenOverlays = { ...overlays, [platform]: [...retained, entry] };
+  await chrome.storage.local.set({ [CONNECTION_TOKEN_OVERLAY_STORAGE_KEY]: next });
+
+  const latest = await resolveCanonicalConnectionAuth(platform, current.connectionId);
+  const latestBinding = latest.status === "resolved" ? tokenGrantBinding(platform, latest.connectionId, latest.auth) : null;
+  if (!sameTokenGrant(binding, latestBinding)) {
+    await removeOverlayBinding(platform, binding!);
+    return false;
+  }
+  return true;
+}
+
+/** Prune token secrets whose exact connection/grant no longer exists in canonical settings. */
+export async function reconcileConnectionTokenOverlays(): Promise<void> {
+  await serializeOAuthStorageWrite(async () => {
+    const [{ envelope }, overlays] = await Promise.all([readEnvelope(), readTokenOverlays()]);
+    const live = liveGrantBindings(envelope);
+    const github = (overlays.github ?? []).filter((entry) => validOverlayBinding("github", entry) && sameTokenGrant(overlayBinding(entry), live.github.get(entry.connectionId) ?? null));
+    const linear = (overlays.linear ?? []).filter((entry) => validOverlayBinding("linear", entry) && sameTokenGrant(overlayBinding(entry), live.linear.get(entry.connectionId) ?? null));
+    const changed = github.length !== (overlays.github?.length ?? 0) || linear.length !== (overlays.linear?.length ?? 0);
+    if (!changed) return;
+    const next = { github, linear };
+    if (!overlaysContainAny(next)) await chrome.storage.local.remove(CONNECTION_TOKEN_OVERLAY_STORAGE_KEY);
+    else await chrome.storage.local.set({ [CONNECTION_TOKEN_OVERLAY_STORAGE_KEY]: next });
+  });
+}
+
+export function setupConnectionTokenOverlayCleanup(): void {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === "local" && changes[SETTINGS_STORAGE_KEY]) {
+      void reconcileConnectionTokenOverlays().catch(() => {});
+    }
+  });
+  void reconcileConnectionTokenOverlays().catch(() => {});
+}
+
 export const readStoredNotionAuth = reader("notion");
 export const readStoredGitlabAuth = reader("gitlab");
 export const readStoredAsanaAuth = reader("asana");
