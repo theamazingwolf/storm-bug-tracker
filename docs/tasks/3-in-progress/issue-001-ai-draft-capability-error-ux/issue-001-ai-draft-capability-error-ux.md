@@ -2,7 +2,7 @@
 type: issue
 id: issue-001
 slug: ai-draft-capability-error-ux
-owner:
+owner: ai-drafting-implementation
 verifier:
 created: 2026-10-04
 priority: p1

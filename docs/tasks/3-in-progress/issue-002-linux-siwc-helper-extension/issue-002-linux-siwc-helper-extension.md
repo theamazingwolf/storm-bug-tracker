@@ -2,7 +2,7 @@
 type: issue
 id: issue-002
 slug: linux-siwc-helper-extension
-owner:
+owner: linux-helper-implementation
 verifier:
 created: 2026-10-04
 priority: p1

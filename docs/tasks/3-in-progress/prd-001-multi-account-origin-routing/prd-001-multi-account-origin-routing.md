@@ -2,7 +2,7 @@
 type: prd
 id: prd-001
 slug: multi-account-origin-routing
-owner:
+owner: connection-implementation
 verifier:
 created: 2026-10-04
 priority: p1
