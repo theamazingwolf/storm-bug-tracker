@@ -4,7 +4,10 @@ export type IntegrationSubTab = "connected" | "add";
 
 export interface ConnectFlowProps {
   connected: boolean;
-  onConnected: () => void;
+  // GitHub/Linear는 추가·재연동된 connection id를 넘긴다. 나머지 플랫폼은 인자 없이 호출한다.
+  onConnected: (connectionId?: string) => void;
+  // 재연동 대상 record. 없으면 "다른 계정 추가"이고, 있으면 정확히 그 id에만 쓴다(선택 폴백 없음).
+  connectionId?: string;
   // 만료 안내의 [다시 연결]이 지목한 셸이 스스로 한 번 열리게 하는 intent. 연동 탭까지만
   // 데려다주면 사용자가 8개 중에서 그 플랫폼을 다시 찾아야 한다.
   //

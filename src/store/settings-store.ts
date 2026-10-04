@@ -23,6 +23,7 @@ import type {
   DestinationProfile,
   GithubConnection,
   LinearConnection,
+  LinearOrganizationProvenance,
   RoutablePlatform,
   SelectedConnectionIds,
   WebsiteOriginMapping,
@@ -33,6 +34,7 @@ import {
   accountIdentityExcluded,
   sameAuthIdentity,
 } from "@/lib/settings-storage";
+import { ConnectionSettingsError, canonicalMappingOrigin } from "@/lib/connection-settings";
 import { chromeLocalStorage } from "./chrome-storage";
 
 // v6: notion 플랫폼 추가 (accounts.notion / lastSubmitFields.notion / lastSubmittedPlatform="notion").
@@ -59,6 +61,22 @@ interface SettingsState {
   removeConnection: (platform: RoutablePlatform, connectionId: string) => void;
   getConnection(platform: "github", connectionId: string): GithubConnection | undefined;
   getConnection(platform: "linear", connectionId: string): LinearConnection | undefined;
+  /** Upsert by id. Throws ConnectionSettingsError (state untouched) on unknown connection, empty ids, or Linear org mismatch. */
+  saveDestinationProfile: (profile: DestinationProfile) => void;
+  /** Removes the profile and every origin mapping that points at it. */
+  removeDestinationProfile: (id: string) => void;
+  /** Replaces every rule for the normalized same origin; other origins are preserved. Throws on invalid origin/unknown destination. */
+  setWebsiteOriginMapping: (origin: string, destinationId: string) => void;
+  /** Without `destinationId` drops every rule for the origin; with it only the matching pair. */
+  removeWebsiteOriginMapping: (origin: string, destinationId?: string) => void;
+  /** Populates/refreshes the verified org of an existing Linear connection. Throws on unknown id or a different org id. */
+  setLinearConnectionOrganization: (connectionId: string, organization: LinearOrganizationProvenance) => void;
+  /**
+   * Reconnect of one exact record. Succeeds only if the new credential is the same GitHub login / same Linear
+   * viewer+organization; then id, defaults, last-submit fields stay. Never falls back to the selected record.
+   */
+  putConnectionAccount(platform: "github", connectionId: string, account: GithubAccount): void;
+  putConnectionAccount(platform: "linear", connectionId: string, account: LinearAccount, options?: AddLinearConnectionOptions): void;
   setConnectionLastSubmitFields: <P extends RoutablePlatform>(platform: P, connectionId: string, fields: P extends "github" ? import("@/types/platform").GithubLastSubmitFields : import("@/types/platform").LinearLastSubmitFields) => void;
   lastSubmitFields: LastSubmitFieldsByPlatform;
   lastSubmittedPlatform?: PlatformId;
@@ -266,6 +284,51 @@ function newConnectionId(platform: RoutablePlatform): string {
   return `${platform}-${id}`;
 }
 
+const PROVIDER_NAME = /^[A-Za-z0-9._-]+$/;
+
+function nonEmpty(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function validateDestinationProfile(
+  profile: DestinationProfile,
+  s: Pick<SettingsState, "connections" | "destinationProfiles">,
+): DestinationProfile {
+  const id = nonEmpty(profile.id);
+  const connectionId = nonEmpty(profile.connectionId);
+  if (!id || !connectionId) throw new ConnectionSettingsError("invalid-destination");
+  const prior = s.destinationProfiles.find((item) => item.id === id);
+  if (prior && prior.platform !== profile.platform) throw new ConnectionSettingsError("platform-mismatch");
+  if (profile.platform === "github") {
+    if (!s.connections.github.some((record) => record.id === connectionId)) throw new ConnectionSettingsError("unknown-connection");
+    const owner = nonEmpty(profile.owner);
+    const repo = nonEmpty(profile.repo);
+    if (!owner || !repo || !PROVIDER_NAME.test(owner) || !PROVIDER_NAME.test(repo)) throw new ConnectionSettingsError("invalid-destination");
+    return { id, platform: "github", connectionId, owner, repo };
+  }
+  const connection = s.connections.linear.find((record) => record.id === connectionId);
+  if (!connection) throw new ConnectionSettingsError("unknown-connection");
+  const organizationId = nonEmpty(profile.organizationId);
+  const teamId = nonEmpty(profile.teamId);
+  if (!organizationId || !teamId) throw new ConnectionSettingsError("invalid-destination");
+  if (profile.projectId !== undefined && !nonEmpty(profile.projectId)) throw new ConnectionSettingsError("invalid-destination");
+  if (!connection.organization) throw new ConnectionSettingsError("organization-unverified");
+  if (connection.organization.id !== organizationId) throw new ConnectionSettingsError("organization-mismatch");
+  const projectId = nonEmpty(profile.projectId);
+  return { id, platform: "linear", connectionId, organizationId, teamId, ...(projectId ? { projectId } : {}) };
+}
+
+function sameGithubLogin(a: GithubAccount, b: GithubAccount): boolean {
+  return a.auth.viewerLogin.toLowerCase() === b.auth.viewerLogin.toLowerCase();
+}
+
+function sameLinearViewer(a: LinearAccount, b: LinearAccount): boolean {
+  if (a.auth.viewerName !== b.auth.viewerName) return false;
+  const ea = a.auth.viewerEmail;
+  const eb = b.auth.viewerEmail;
+  return !ea || !eb || ea.toLowerCase() === eb.toLowerCase();
+}
+
 export function isV3Shape(state: unknown): state is V3Shape {
   if (!state || typeof state !== "object") return false;
   return "accounts" in state;
@@ -361,6 +424,67 @@ export const useSettingsStore = create<SettingsState>()(
         return { connections, destinationProfiles, websiteOriginMappings, selectedConnectionIds, accounts, lastSubmitFields };
       }),
       getConnection: ((platform: RoutablePlatform, connectionId: string) => useSettingsStore.getState().connections[platform].find((record) => record.id === connectionId)) as SettingsState["getConnection"],
+      saveDestinationProfile: (profile) => set((s) => {
+        const next = validateDestinationProfile(profile, s);
+        const exists = s.destinationProfiles.some((item) => item.id === next.id);
+        return { destinationProfiles: exists ? s.destinationProfiles.map((item) => item.id === next.id ? next : item) : [...s.destinationProfiles, next] };
+      }),
+      removeDestinationProfile: (id) => set((s) => ({
+        destinationProfiles: s.destinationProfiles.filter((item) => item.id !== id),
+        websiteOriginMappings: s.websiteOriginMappings.filter((mapping) => mapping.destinationId !== id),
+      })),
+      setWebsiteOriginMapping: (origin, destinationId) => set((s) => {
+        const canonical = canonicalMappingOrigin(origin);
+        if (!canonical) throw new ConnectionSettingsError("invalid-origin");
+        if (!s.destinationProfiles.some((item) => item.id === destinationId)) throw new ConnectionSettingsError("unknown-destination");
+        const kept = s.websiteOriginMappings.filter((mapping) => canonicalMappingOrigin(mapping.origin) !== canonical);
+        return { websiteOriginMappings: [...kept, { origin: canonical, destinationId }] };
+      }),
+      removeWebsiteOriginMapping: (origin, destinationId) => set((s) => {
+        const canonical = canonicalMappingOrigin(origin);
+        const websiteOriginMappings = s.websiteOriginMappings.filter((mapping) => {
+          const sameOrigin = mapping.origin === origin || (!!canonical && canonicalMappingOrigin(mapping.origin) === canonical);
+          return !(sameOrigin && (destinationId === undefined || mapping.destinationId === destinationId));
+        });
+        return websiteOriginMappings.length === s.websiteOriginMappings.length ? s : { websiteOriginMappings };
+      }),
+      setLinearConnectionOrganization: (connectionId, organization) => set((s) => {
+        const record = s.connections.linear.find((item) => item.id === connectionId);
+        if (!record) throw new ConnectionSettingsError("unknown-connection");
+        const id = nonEmpty(organization.id);
+        const name = nonEmpty(organization.name);
+        if (!id || !name) throw new ConnectionSettingsError("invalid-organization");
+        if (record.organization && record.organization.id !== id) throw new ConnectionSettingsError("organization-mismatch");
+        return { connections: { ...s.connections, linear: s.connections.linear.map((item) => item.id === connectionId ? { ...item, organization: { id, name } } : item) } };
+      }),
+      putConnectionAccount: ((platform: RoutablePlatform, connectionId: string, account: GithubAccount | LinearAccount, options?: AddLinearConnectionOptions) => set((s) => {
+        if (platform === "github") {
+          const prior = s.connections.github.find((item) => item.id === connectionId);
+          if (!prior) throw new ConnectionSettingsError("unknown-connection");
+          const next = account as GithubAccount;
+          if (next.platform !== "github" || !sameGithubLogin(prior.account, next)) throw new ConnectionSettingsError("account-mismatch");
+          const merged: GithubAccount = { ...prior.account, auth: next.auth, connectedAt: next.connectedAt };
+          return {
+            connections: { ...s.connections, github: s.connections.github.map((item) => item.id === connectionId ? { ...item, account: merged } : item) },
+            ...(s.selectedConnectionIds.github === connectionId ? { accounts: { ...s.accounts, github: merged } } : {}),
+          };
+        }
+        const prior = s.connections.linear.find((item) => item.id === connectionId);
+        if (!prior) throw new ConnectionSettingsError("unknown-connection");
+        const next = account as LinearAccount;
+        if (next.platform !== "linear" || !sameLinearViewer(prior.account, next)) throw new ConnectionSettingsError("account-mismatch");
+        const verified = options?.organization;
+        if (prior.organization) {
+          if (!verified) throw new ConnectionSettingsError("organization-unverified");
+          if (verified.id !== prior.organization.id) throw new ConnectionSettingsError("organization-mismatch");
+        }
+        const organization = verified ?? prior.organization;
+        const merged: LinearAccount = { ...prior.account, auth: next.auth, connectedAt: next.connectedAt };
+        return {
+          connections: { ...s.connections, linear: s.connections.linear.map((item) => item.id === connectionId ? { ...item, account: merged, ...(organization ? { organization: { id: organization.id, name: verified?.name ?? organization.name } } : {}) } : item) },
+          ...(s.selectedConnectionIds.linear === connectionId ? { accounts: { ...s.accounts, linear: merged } } : {}),
+        };
+      })) as SettingsState["putConnectionAccount"],
       setConnectionLastSubmitFields: ((platform: RoutablePlatform, connectionId: string, fields: import("@/types/platform").GithubLastSubmitFields | import("@/types/platform").LinearLastSubmitFields) => set((s) => {
         if (platform === "github") {
           const typedFields = fields as import("@/types/platform").GithubLastSubmitFields;
