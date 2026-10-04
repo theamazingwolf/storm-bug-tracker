@@ -96,6 +96,7 @@ export async function setup(ext: Extension, id: string, provider: Provider, opti
   const title = options.title ?? "Recovery acceptance";
   const issue = {
     id, status: "draft", platform: provider, title, createdAt: Date.now(), updatedAt: Date.now(), pageUrl: fixture.url(),
+    ...(provider === "github" ? { destinationBinding: { id: "recovery-destination", platform: "github", connectionId: "legacy-github", owner: "owner", repo: "repo" } } : {}),
     captureMode: kinds.includes("video") ? "video" : kinds.includes("capture") ? "screenshot" : "freeform",
     draft: { title, sections: { description: options.description ?? (kinds.includes("inline") ? "![inline](inline:recover-image)" : "Broken page") } },
     snapshot: { before: kinds.includes("capture"), after: false },
@@ -108,7 +109,7 @@ export async function setup(ext: Extension, id: string, provider: Provider, opti
   const account = { platform: provider, connectedAt: 1, defaults: {}, auth: provider === "webhook" ? { url: "https://example.com/hook", format: "multipart", headers: [] } : { kind: "oauth", accessToken: "dummy", cloudId: "site", grantedAt: Date.now() }, ...(provider === "jira" ? { projectKey: "BUG", issueTypeId: "1", issueTypeName: "Bug" } : {}) };
   await ext.evalInExt(async ({ issue, account, provider, defaults, options, kinds, png, pdf }) => {
     await chrome.storage.local.set({
-      "bugshot-settings": JSON.stringify({ state: { accounts: { [provider]: account }, lastSubmitFields: defaults, titlePrefix: "" }, version: 12 }),
+      "bugshot-settings": JSON.stringify({ state: { accounts: { [provider]: account }, lastSubmitFields: defaults, titlePrefix: "", destinationProfiles: issue.destinationBinding ? [issue.destinationBinding] : [] }, version: 12 }),
       "bugshot-app-settings": JSON.stringify({ state: { locale: options.locale ?? "en", theme: options.theme ?? "light", attachmentsEnabled: true, issueSections: [{ id: "description", enabled: true, renderAs: "paragraph", builtIn: true }] }, version: 11 }),
       "bugshot-issues": JSON.stringify({ state: { issues: [issue] }, version: 5 }),
     });

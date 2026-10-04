@@ -68,9 +68,12 @@ const RETRY_TYPES: Record<string, RegExp> = {
   slack: /^slack\.(getAccountIdentity|requestFileUpload|sendFileUpload|completeFileUploads)$/,
 };
 function sent(calls: Rpc[], from: number, provider?: Provider) {
-  const slice = calls.slice(from).filter((m) => !m.type.startsWith("analytics."));
+  // Inline-connect mounting probes local OAuth configuration, not a provider endpoint.
+  // Keep auth start, identity reads, uploads and all other operations in the assertions.
+  const relevant = calls.slice(from).filter((m) => m.type !== "github.oauth.available" && m.type !== "linear.oauth.available");
+  const slice = relevant.filter((m) => !m.type.startsWith("analytics."));
   if (provider) expect(slice.filter((m) => !RETRY_TYPES[provider].test(m.type)).map((m) => m.type)).toEqual([]);
-  return calls.slice(from);
+  return relevant;
 }
 // A retry must never create: across the whole flow the spy sees exactly the first creation.
 const expectOneCreation = (calls: Rpc[]) => expect(calls.filter(isCreate)).toHaveLength(1);
@@ -349,7 +352,7 @@ test("a disconnected account stops the retry as authentication without any write
   const { panel, id } = await start(ext, "github", { kinds: ["user"] });
   const calls = await remote(panel, "github", { rejectUpload: true });
   await submitPartial(panel);
-  await panel.evaluate(async () => { const key = "bugshot-settings"; const raw = JSON.parse((await chrome.storage.local.get(key))[key]); raw.state.accounts = {}; await chrome.storage.local.set({ [key]: JSON.stringify(raw) }); });
+  await panel.evaluate(async () => { const key = "bugshot-settings"; const raw = JSON.parse((await chrome.storage.local.get(key))[key]); raw.state.accounts = {}; raw.state.connections = { github: [], linear: [] }; raw.state.selectedConnectionIds = {}; raw.state.destinationProfiles = []; raw.state.websiteOriginMappings = []; await chrome.storage.local.set({ [key]: JSON.stringify(raw) }); });
   await panel.reload();
   await panel.getByTestId("tab-issue-list").click();
   const mark = calls.length;

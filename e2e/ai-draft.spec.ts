@@ -10,6 +10,9 @@ const LLM_SEED = {
   baseUrl: "https://mock-llm.test/v1", // api.anthropic.com이 아니라 openai-compatible로 판정
   apiKey: "",
   modelId: "mock-model",
+  // This image-payload test represents explicit approval of this exact fake endpoint/model.
+  // Without that approval the product correctly defaults to text-only.
+  imageCapability: { baseUrl: "https://mock-llm.test/v1", modelId: "mock-model" },
 };
 
 // mock이 돌려줄 초안(JSON). description은 이미지 보존 검증의 텍스트 교체 대상.

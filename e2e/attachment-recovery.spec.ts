@@ -86,7 +86,7 @@ test("native PDF download preserves bytes and state after panel reopen and disco
   await panel.close();
   const reopened = await openRecoveryPanel(ext, tabId); pages.push(reopened);
   await installRpc(reopened, "github", {}, calls);
-  await reopened.evaluate(async () => { const key = "bugshot-settings"; const raw = JSON.parse((await chrome.storage.local.get(key))[key]); raw.state.accounts = {}; await chrome.storage.local.set({ [key]: JSON.stringify(raw) }); });
+  await reopened.evaluate(async () => { const key = "bugshot-settings"; const raw = JSON.parse((await chrome.storage.local.get(key))[key]); raw.state.accounts = {}; raw.state.connections = { github: [], linear: [] }; raw.state.selectedConnectionIds = {}; raw.state.destinationProfiles = []; raw.state.websiteOriginMappings = []; await chrome.storage.local.set({ [key]: JSON.stringify(raw) }); });
   await reopened.reload();
   await openRecovery(reopened);
   const pending = reopened.waitForEvent("download");
@@ -355,7 +355,8 @@ for (const missing of [false, true]) {
       await new Promise<void>((resolve) => { tx.oncomplete = () => resolve(); }); db.close();
     }, { id: live.id, fileId: live.attachments[0].id });
     await panel.getByTestId("issue-submit-open").click();
-    await expect(panel.getByTestId("submit-issue-confirm")).not.toHaveAttribute("aria-disabled", "true");
+    await panel.locator("#capture-destination").selectOption("saved:recovery-destination");
+    await expect(panel.getByTestId("submit-issue-confirm")).toBeEnabled();
     await panel.getByTestId("submit-issue-confirm").click();
     if (missing) {
       await expect(panel.locator('[data-sonner-toast][data-type="error"]')).toBeVisible();

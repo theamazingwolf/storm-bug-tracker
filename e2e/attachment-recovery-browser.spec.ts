@@ -14,6 +14,7 @@ async function seed(ext: Extension, id: string, phase: "unknown" | "partial" | "
   const now = Date.now();
   const issue = {
     id, title: "Browser recovery acceptance", platform: "github", status: phase === "partial" ? "submitted" : "draft",
+    ...(phase === "draft" ? { destinationBinding: { id: "browser-recovery-destination", platform: "github", connectionId: "legacy-github", owner: "owner", repo: "repo" } } : {}),
     createdAt: now, updatedAt: now, pageUrl: "", captureMode: "freeform",
     draft: { title: "Browser recovery acceptance", sections: { description: "Browser acceptance" } },
     snapshot: { before: false, after: false },
@@ -30,7 +31,7 @@ async function seed(ext: Extension, id: string, phase: "unknown" | "partial" | "
   };
   await ext.evalInExt(async ({ issue, meta, phase, theme, bytes }) => {
     await chrome.storage.local.set({
-      "bugshot-settings": JSON.stringify({ state: { accounts: phase === "draft" ? { github: { platform: "github", connectedAt: 1, defaults: {}, auth: { kind: "oauth", accessToken: "dummy", grantedAt: Date.now() } } } : {}, lastSubmitFields: { github: { owner: "owner", repo: "repo" } }, titlePrefix: "" }, version: 12 }),
+      "bugshot-settings": JSON.stringify({ state: { accounts: phase === "draft" ? { github: { platform: "github", connectedAt: 1, defaults: {}, auth: { kind: "oauth", accessToken: "dummy", grantedAt: Date.now() } } } : {}, lastSubmitFields: { github: { owner: "owner", repo: "repo" } }, destinationProfiles: issue.destinationBinding ? [issue.destinationBinding] : [], titlePrefix: "" }, version: 12 }),
       "bugshot-app-settings": JSON.stringify({ state: { locale: "en", theme, attachmentsEnabled: true, issueSections: [{ id: "description", enabled: true, renderAs: "paragraph", builtIn: true }] }, version: 11 }),
       "bugshot-issues": JSON.stringify({ state: { issues: [issue] }, version: 5 }),
     });
@@ -366,6 +367,7 @@ for (const entrance of ["live", "saved"] as const) test(`${entrance} submission 
   } else {
     await page.getByTestId("issue-submit-open").click();
   }
+  await page.locator("#capture-destination").selectOption("saved:browser-recovery-destination");
   const before = await originalDraftSources(page);
   expect(before.attachments).toHaveLength(1);
   expect(before.attachments[0]).toMatchObject({ bytes: BYTES, type: "application/pdf" });
