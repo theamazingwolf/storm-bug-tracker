@@ -72,6 +72,8 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    env:
+      E2E_LOCAL_ONLY: "1"
     # 샤드당 테스트 ~3분 + 셋업 ~2분. 걸리면 hard kill이라 후속 artifact 업로드가
     # 안 돌 수 있으니 넉넉히 잡는다.
     timeout-minutes: 30
