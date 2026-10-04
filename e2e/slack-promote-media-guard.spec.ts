@@ -31,6 +31,8 @@ function settingsEnvelope() {
       // ghFields.owner/repo prefill — 없으면 handleGithubSubmit이 submitToGithub 전에 requiredMissing로
       // 일찍 throw해 업로드/가드 경로를 안 탄다.
       lastSubmitFields: { github: { owner: "o", repo: "r" } },
+      // v13 migration gives the legacy account its stable connection ID.
+      destinationProfiles: [{ id: "promote-github", platform: "github", connectionId: "legacy-github", owner: "o", repo: "r" }],
       titlePrefix: "",
     },
     version: 10,
@@ -161,6 +163,8 @@ test("GitHub 승격 중 미디어 업로드 실패 시 이슈 생성 전 중단 
 
   // 승격 → 제출 다이얼로그(github 단일 트래커라 탭 없이 바로 github 필드).
   await panel.getByTestId("promote-issue").click();
+  // Promotion is an explicit new destination choice, not a legacy-account fallback.
+  await panel.locator("#capture-destination").selectOption("saved:promote-github");
   const confirm = panel.getByTestId("submit-issue-confirm");
   await expect(confirm).toBeVisible();
   await expect(confirm).toBeEnabled();

@@ -143,11 +143,9 @@ function startFixtureServer(): Promise<{ server: Server; port: number }> {
     });
     server.on("error", reject);
     // 포트 0(ephemeral) 바인딩 — 실포트를 fixtureUrl에 반영해 점유 충돌 원천 제거.
-    // host 미지정(전 인터페이스) — localhost(::1 포함)로도 접속돼 cross-origin 재현에 쓴다
-    // (127.0.0.1 vs localhost는 같은 서버지만 origin이 다르다 → origin 필터 spec).
-    // trade-off: 테스트 동안 LAN 노출(정적 HTML + 경로 탈출 가드로 실위험 낮음),
-    // macOS 방화벽 활성 시 최초 1회 수신 허용 프롬프트 가능.
-    server.listen(0, () => {
+    // Local fixture traffic only; never expose the synthetic test server to the LAN.
+    // Chromium can also reach this IPv4 loopback listener through localhost.
+    server.listen(0, "127.0.0.1", () => {
       const addr = server.address();
       if (typeof addr === "object" && addr) resolve({ server, port: addr.port });
       else reject(new Error("fixture server: 포트를 확인할 수 없음"));
@@ -155,9 +153,10 @@ function startFixtureServer(): Promise<{ server: Server; port: number }> {
   });
 }
 
-export const test = base.extend<object, { ext: ExtContext }>({
+export const test = base.extend<object, { ext: ExtContext; localOnly: boolean }>({
+  localOnly: [false, { scope: "worker", option: true }],
   ext: [
-    async ({}, use) => {
+    async ({ localOnly }, use) => {
       if (!existsSync(path.join(DIST_E2E, "manifest.json"))) {
         throw new Error(
           "dist-e2e/manifest.json이 없습니다 — pnpm build:e2e를 먼저 실행하세요.",
@@ -192,7 +191,9 @@ export const test = base.extend<object, { ext: ExtContext }>({
           // *.bugshot.test를 fixture 서버로 보낸다 — 서브도메인이 갈리는 동족 호스트를
           // 만들 유일한 수단(기존 127.0.0.1/localhost는 registrable domain이 서로 달라
           // API Hosts 파생의 동족 조건을 못 만든다). 기존 spec은 이 규칙에 안 걸려 무변경.
-          "--host-resolver-rules=MAP *.bugshot.test 127.0.0.1",
+          localOnly || process.env.E2E_LOCAL_ONLY === "1"
+            ? "--host-resolver-rules=MAP *.bugshot.test 127.0.0.1, MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1"
+            : "--host-resolver-rules=MAP *.bugshot.test 127.0.0.1",
           "--no-first-run",
           "--no-default-browser-check",
           ...(process.env.E2E_SHOW === "1" || process.env.CI
