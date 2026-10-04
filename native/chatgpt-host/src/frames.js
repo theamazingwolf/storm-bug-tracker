@@ -1,8 +1,8 @@
-import { MAX_FRAME_BYTES, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES } from "./constants.js";
+import { MAX_FRAME_BYTES, MAX_RESPONSE_BYTES } from "./constants.js";
 
 export class FrameDecoder {
   #buffer = Buffer.alloc(0);
-  constructor({ maxBytes = MAX_REQUEST_BYTES } = {}) { this.maxBytes = maxBytes; }
+  constructor({ maxBytes = MAX_FRAME_BYTES } = {}) { this.maxBytes = maxBytes; }
   push(chunk) {
     if (chunk.length > 64 * 1024) {
       const values = [];

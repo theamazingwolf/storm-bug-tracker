@@ -1,4 +1,4 @@
-import { MAX_DRAFT_CHARS } from "./constants.js";
+import { MAX_DRAFT_CHARS, MAX_INSTRUCTIONS_BYTES, MAX_REQUEST_BYTES } from "./constants.js";
 
 const METHODS = new Set(["status", "signIn", "listProfiles", "selectProfile", "listModels", "draft", "cancel", "signOut"]);
 const ownKeysOnly = (value, allowed) => Object.keys(value).every((key) => allowed.includes(key));
@@ -15,17 +15,18 @@ export function validateRequest(value) {
       break;
     case "signIn":
       if (!ownKeysOnly(params, ["profileId", "reconnect"])) throw new Error("invalid_params");
-      if (params.profileId !== undefined && !/^[a-zA-Z0-9_-]{1,80}$/.test(params.profileId)) throw new Error("invalid_profile_id");
+      if (params.profileId !== undefined && (typeof params.profileId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(params.profileId))) throw new Error("invalid_profile_id");
       if (params.reconnect !== undefined && typeof params.reconnect !== "boolean") throw new Error("invalid_params");
+      if (params.reconnect === true && params.profileId === undefined) throw new Error("invalid_profile_id");
       break;
     case "selectProfile": case "signOut":
       if (!ownKeysOnly(params, ["profileId"]) || typeof params.profileId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(params.profileId)) throw new Error("invalid_profile_id");
       break;
     case "listModels":
-      if (!ownKeysOnly(params, ["profileId"]) || (params.profileId !== undefined && typeof params.profileId !== "string")) throw new Error("invalid_params");
+      if (!ownKeysOnly(params, ["profileId"]) || (params.profileId !== undefined && (typeof params.profileId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(params.profileId)))) throw new Error("invalid_params");
       break;
     case "draft":
-      if (!ownKeysOnly(params, ["profileId", "model", "text", "images", "imageChoice"])) throw new Error("invalid_params");
+      if (!ownKeysOnly(params, ["profileId", "model", "text", "images", "imageChoice", "instructions"])) throw new Error("invalid_params");
       if (typeof params.model !== "string" || params.model.length < 1 || params.model.length > 200) throw new Error("invalid_model");
       if (typeof params.text !== "string" || params.text.length < 1 || params.text.length > MAX_DRAFT_CHARS) throw new Error("invalid_draft_text");
       if (params.images !== undefined) {
@@ -33,12 +34,17 @@ export function validateRequest(value) {
         throw new Error("images_unsupported");
       }
       if (params.imageChoice !== undefined && params.imageChoice !== "text-only") throw new Error("images_unsupported");
-      if (params.profileId !== undefined && typeof params.profileId !== "string") throw new Error("invalid_params");
+      if (params.profileId !== undefined && (typeof params.profileId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(params.profileId))) throw new Error("invalid_params");
+      if (params.instructions !== undefined && typeof params.instructions !== "string") throw new Error("invalid_instructions");
+      if (params.instructions !== undefined && Buffer.byteLength(params.instructions, "utf8") > MAX_INSTRUCTIONS_BYTES) throw new Error("instructions_too_large");
       break;
     case "cancel":
       if (!ownKeysOnly(params, ["requestId"]) || !(typeof params.requestId === "string" || Number.isSafeInteger(params.requestId))) throw new Error("invalid_cancel_request");
       break;
   }
+  let serializedBytes;
+  try { serializedBytes = Buffer.byteLength(JSON.stringify(value), "utf8"); } catch { throw new Error("invalid_request"); }
+  if (serializedBytes + 4 > MAX_REQUEST_BYTES) throw new Error("request_too_large");
   return { id: value.id, method: value.method, params };
 }
 
