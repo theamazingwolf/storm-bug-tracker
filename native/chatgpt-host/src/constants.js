@@ -1,0 +1,17 @@
+export const HOST_NAME = "com.storm.bug_tracker.chatgpt";
+export const APP_NAME = "Storm Bug Tracker";
+export const AUTH_ORIGIN = "https://auth.openai.com";
+export const AUTHORIZE_URL = `${AUTH_ORIGIN}/api/accounts/authorize`;
+export const TOKEN_URL = `${AUTH_ORIGIN}/api/accounts/oauth/token`;
+export const API_ORIGIN = "https://api.openai.com/v1";
+export const RESOURCE = API_ORIGIN;
+export const JWKS_URL = `${AUTH_ORIGIN}/.well-known/jwks.json`;
+export const ISSUER = AUTH_ORIGIN;
+export const REQUIRED_SCOPES = ["openid", "profile", "email", "offline_access", "resource.invoke", "chatgpt.tokens.use.direct"];
+export const PLAN_SCOPE = "chatgpt.tokens.use.direct";
+export const CALLBACK_PATH = "/auth/callback";
+export const MAX_FRAME_BYTES = 1024 * 1024;
+export const MAX_REQUEST_BYTES = 256 * 1024;
+export const MAX_RESPONSE_BYTES = 1024 * 1024 - 1;
+export const MAX_DRAFT_CHARS = 100_000;
+export const AUTH_TIMEOUT_MS = 5 * 60 * 1000;

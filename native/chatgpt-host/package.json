@@ -1,0 +1,14 @@
+{
+  "name": "storm-bug-tracker-chatgpt-host",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check src/constants.js && node --check src/security.js && node --check src/protocol.js && node --check src/frames.js && node --check src/profiles.js && node --check src/oauth.js && node --check src/responses.js && node --check src/host.js && node --check install.js && node --check uninstall.js"
+  },
+  "dependencies": {
+    "jose": "6.2.12"
+  }
+}

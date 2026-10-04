@@ -1,0 +1,201 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, readFile, stat, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createAuthAttempt, createPkce, isExtensionId, FORBIDDEN_UPSTREAM_EXTENSION_ID, parseScopes, safeErrorCode, validateCallback } from "../src/security.js";
+import { ProfileStore } from "../src/profiles.js";
+import { FrameDecoder, encodeFrame } from "../src/frames.js";
+import { validateRequest } from "../src/protocol.js";
+import { validateNativeOrigin, createHostApplication } from "../src/host.js";
+import { installManifest } from "../install.js";
+import { uninstallManifest } from "../uninstall.js";
+import { listenLoopback, refreshProfile, signIn, verifyIdToken } from "../src/oauth.js";
+import { createServer, request as httpRequest } from "node:http";
+import { createHash } from "node:crypto";
+
+const EXT = "abcdefghijklmnopabcdefghijklmnop";
+const tempDir = () => mkdtemp(join(tmpdir(), "storm-chatgpt-helper-"));
+
+test("state, PKCE and nonce are fresh and S256 callback binds registration identity", () => {
+  const { verifier, challenge } = createPkce();
+  assert.match(verifier, /^[A-Za-z0-9_-]+$/);
+  assert.notEqual(verifier, challenge);
+  const args = { clientId: "issued-client-a", hostId: "urn:uuid:host", redirectUri: "http://127.0.0.1:12345/auth/callback", newRegistration: true };
+  const one = createAuthAttempt(args); const two = createAuthAttempt(args);
+  assert.notEqual(one.state, two.state); assert.notEqual(one.nonce, two.nonce); assert.notEqual(one.verifier, two.verifier);
+  const url = new URL(one.authorizeUrl);
+  assert.equal(url.searchParams.get("client_id"), "dynamic_agent_client");
+  assert.equal(url.searchParams.get("agent_name_hint"), "Storm Bug Tracker");
+  assert.equal(url.searchParams.get("code_challenge_method"), "S256");
+  assert.equal(url.searchParams.get("code_challenge"), createHash("sha256").update(one.verifier).digest("base64url"));
+  const cb = new URL(args.redirectUri); cb.searchParams.set("state", one.state); cb.searchParams.set("code", "fake-auth-code"); cb.searchParams.set("client_id", "issued-client-a");
+  assert.deepEqual(validateCallback(cb.toString(), one), { code: "fake-auth-code", clientId: "issued-client-a" });
+  cb.searchParams.set("client_id", "dynamic_agent_client"); assert.throws(() => validateCallback(cb.toString(), one), /registration_incomplete/);
+  cb.searchParams.set("client_id", "evil-client"); assert.equal(validateCallback(cb.toString(), one).clientId, "evil-client", "new registration binds to the issued callback ID, then verifies its ID-token audience");
+  cb.searchParams.set("state", "wrong"); assert.throws(() => validateCallback(cb.toString(), one), /invalid_state/);
+});
+
+test("issued client ID is reused and mismatched returning client IDs rejected", () => {
+  const attempt = createAuthAttempt({ clientId: "issued-client", hostId: "urn:uuid:host", redirectUri: "http://127.0.0.1:1111/auth/callback", newRegistration: false });
+  const auth = new URL(attempt.authorizeUrl); assert.equal(auth.searchParams.get("client_id"), "issued-client"); assert.equal(auth.searchParams.has("agent_name_hint"), false);
+  const cb = new URL(attempt.redirectUri); cb.searchParams.set("state", attempt.state); cb.searchParams.set("code", "fake-code");
+  assert.equal(validateCallback(cb.toString(), attempt).clientId, "issued-client");
+  cb.searchParams.set("client_id", "other-client"); assert.throws(() => validateCallback(cb.toString(), attempt), /account_binding_mismatch/);
+});
+
+test("scope gate and safe errors never echo credentials", () => {
+  assert.equal(parseScopes("openid resource.invoke").has("chatgpt.tokens.use.direct"), false);
+  assert.equal(safeErrorCode(new Error("Bearer fake-access-token")), "request_failed");
+  assert.equal(safeErrorCode("refresh_token=fake-refresh-token"), "request_failed");
+  assert.equal(safeErrorCode("invalid_profile_id"), "invalid_profile_id");
+  assert.equal(isExtensionId(EXT), true); assert.equal(isExtensionId("../" + EXT), false);
+  assert.equal(FORBIDDEN_UPSTREAM_EXTENSION_ID, "dhmffogmoohdjficicjjfolcheklngfm");
+});
+
+test("profile storage is private, atomic, rotating refresh token race checked, and traversal-safe", async () => {
+  const dir = await tempDir();
+  try {
+    const store = new ProfileStore(dir); const hostId = await store.initialize();
+    assert.equal(hostId, await store.initialize());
+    assert.equal((await stat(dir)).mode & 0o777, 0o700);
+    const profile = { subject: "fake-subject", issuer: "https://auth.openai.com", clientId: "issued-client", hostId, scopes: ["chatgpt.tokens.use.direct"], accessToken: "fake-access-token", refreshToken: "fake-refresh-token", idToken: "fake-id-token", expiresAt: 1234, earliestRefreshAt: 0 };
+    await store.put("profile_safe", profile);
+    assert.equal((await stat(join(dir, "profile-profile_safe.json"))).mode & 0o777, 0o600);
+    const rotated = { ...profile, accessToken: "fake-access-token-2", refreshToken: "fake-refresh-token-2", previousRefreshToken: "fake-refresh-token" };
+    await store.put("profile_safe", rotated);
+    assert.equal((await store.get("profile_safe")).refreshToken, "fake-refresh-token-2");
+    await assert.rejects(store.put("profile_safe", { ...rotated, previousRefreshToken: "stale-fake-refresh-token" }), /refresh_token_race/);
+    await assert.rejects(store.get("../outside"), /invalid_profile_id/);
+    assert.equal(await store.removeTokens("profile_safe"), true);
+    assert.equal((await store.get("profile_safe")).accessToken, undefined);
+    const linkPath = join(dir, "profile-link.json"); await symlink(join(dir, "profile-profile_safe.json"), linkPath);
+    await assert.rejects(store.get("link"), /unsafe_profile_file/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("native frames handle split input and reject malicious/oversized frames", () => {
+  const frame = encodeFrame({ id: 4, method: "status", params: {} }); const decoder = new FrameDecoder();
+  assert.deepEqual(decoder.push(frame.subarray(0, 3)), []);
+  assert.deepEqual(decoder.push(frame.subarray(3)), [{ id: 4, method: "status", params: {} }]);
+  const oversized = Buffer.alloc(4); oversized.writeUInt32LE(256 * 1024 + 1);
+  assert.throws(() => new FrameDecoder().push(oversized), /invalid_frame_size/);
+  const badJson = Buffer.from([2, 0, 0, 0, 0x7b, 0x7d]); assert.deepEqual(new FrameDecoder().push(badJson), [{}]);
+  assert.throws(() => validateRequest({ id: "x", method: "run", params: { command: "touch /tmp/pwn" } }), /unsupported_method/);
+  assert.throws(() => validateRequest({ id: 1, method: "draft", params: { model: "m", text: "x", images: [{ mimeType: "image/png", data: "x" }] } }), /images_unsupported/);
+});
+
+test("native host requires exact caller extension origin and safe installer arguments", () => {
+  assert.equal(validateNativeOrigin([`--allowed-extension-id=${EXT}`, `chrome-extension://${EXT}/`]), EXT);
+  assert.throws(() => validateNativeOrigin([`--allowed-extension-id=${EXT}`, "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"]), /unauthorized_extension_origin/);
+  assert.throws(() => validateNativeOrigin(["--allowed-extension-id=*", `chrome-extension://${EXT}/`]), /invalid_host_arguments|unauthorized_extension_origin/);
+  assert.throws(() => validateNativeOrigin([`--allowed-extension-id=${FORBIDDEN_UPSTREAM_EXTENSION_ID}`, `chrome-extension://${FORBIDDEN_UPSTREAM_EXTENSION_ID}/`]), /unauthorized_extension_origin/);
+});
+
+test("installer/uninstaller only write matching manifests under temporary fixtures", async () => {
+  const root = await tempDir();
+  try {
+    const path = await installManifest({ extensionId: EXT, browser: "chrome", configRoot: root, hostPath: "/opt/storm/src/host.js", nodePath: "/usr/bin/node" });
+    const manifest = JSON.parse(await readFile(path, "utf8"));
+    assert.equal(manifest.name, "com.storm.bug_tracker.chatgpt");
+    assert.deepEqual(manifest.allowed_origins, [`chrome-extension://${EXT}/`]);
+    assert.equal(manifest.args[1], `--allowed-extension-id=${EXT}`);
+    assert.throws(() => validateNativeOrigin([manifest.args[1], "chrome-extension://evil/"]), /unauthorized_extension_origin/);
+    await assert.rejects(installManifest({ extensionId: "../../evil", browser: "chrome", configRoot: root }), /invalid_or_upstream_extension_id/);
+    await assert.rejects(installManifest({ extensionId: FORBIDDEN_UPSTREAM_EXTENSION_ID, browser: "chrome", configRoot: root }), /invalid_or_upstream_extension_id/);
+    await assert.rejects(uninstallManifest({ extensionId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", browser: "chrome", configRoot: root }), /manifest_identity_mismatch/);
+    assert.equal(await uninstallManifest({ extensionId: EXT, browser: "chrome", configRoot: root }), path);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+function requestStatus(port, path, host) {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ hostname: "127.0.0.1", port, path, headers: { host } }, (res) => { res.resume(); res.on("end", () => resolve(res.statusCode)); });
+    req.on("error", reject); req.end();
+  });
+}
+
+test("loopback callback listener binds only 127.0.0.1 and enforces host and route", async () => {
+  const listener = listenLoopback({ serverFactory: createServer, timeoutMs: 5000 });
+  try {
+    const redirect = await listener.ready; const url = new URL(redirect);
+    assert.equal(url.hostname, "127.0.0.1"); assert.equal(url.pathname, "/auth/callback");
+    assert.equal(await requestStatus(Number(url.port), "/auth/callback?state=s&code=fake-code", "localhost:1"), 400);
+    assert.equal(await requestStatus(Number(url.port), "/callback", `127.0.0.1:${url.port}`), 404);
+    assert.equal(await requestStatus(Number(url.port), "/auth/callback?state=s&code=fake-code", `127.0.0.1:${url.port}`), 200);
+    assert.match(await listener.promise, /127\.0\.0\.1/);
+  } finally { listener.cancel(); }
+});
+
+test("refresh honors earliest_refresh_at and single-flights rotating token persistence", async () => {
+  const old = { profileId: "profile_refresh", subject: "fake-subject", issuer: "https://auth.openai.com", clientId: "issued-client", hostId: "urn:uuid:host", scopes: ["chatgpt.tokens.use.direct", "offline_access"], accessToken: "fake-access-token", refreshToken: "fake-refresh-token", idToken: "fake-id-token", expiresAt: 900, earliestRefreshAt: 2_000 };
+  let current = old; let exchanges = 0; let writes = 0;
+  const store = { async get() { return current; }, async put(id, next) { assert.equal(id, old.profileId); writes++; assert.equal(next.previousRefreshToken, "fake-refresh-token"); current = { ...next, previousRefreshToken: undefined }; } };
+  const fetchImpl = async (_url, init) => { exchanges++; const body = new URLSearchParams(init.body); assert.equal(body.get("refresh_token"), "fake-refresh-token"); return new Response(JSON.stringify({ access_token: "fake-access-token-rotated", refresh_token: "fake-refresh-token-rotated", id_token: "fake-id-token-rotated", token_type: "Bearer", expires_in: 3600, scope: "openid offline_access chatgpt.tokens.use.direct", earliest_refresh_at: "1970-01-01T00:00:04.000Z" }), { status: 200 }); };
+  const verify = async () => ({ subject: "fake-subject", email: null, issuer: "https://auth.openai.com" });
+  await assert.rejects(refreshProfile({ store, profileId: old.profileId, fetchImpl, verify, now: 1_999 }), /token_refresh_not_yet_allowed/);
+  const [a, b] = await Promise.all([
+    refreshProfile({ store, profileId: old.profileId, fetchImpl, verify, now: 2_000 }),
+    refreshProfile({ store, profileId: old.profileId, fetchImpl, verify, now: 2_001 }),
+  ]);
+  assert.equal(exchanges, 1); assert.equal(writes, 1);
+  assert.equal(a.refreshToken, "fake-refresh-token-rotated"); assert.equal(b.refreshToken, "fake-refresh-token-rotated");
+  assert.equal(current.accessToken, "fake-access-token-rotated"); assert.equal(current.refreshToken, "fake-refresh-token-rotated"); assert.equal(current.idToken, "fake-id-token-rotated");
+  assert.ok(current.expiresAt > 2_000);
+});
+
+test("sign-in refuses an identity-only grant and never persists a plan-enabled profile", async () => {
+  let callbackResolve; let stored = false;
+  const listener = { ready: Promise.resolve("http://127.0.0.1:33442/auth/callback"), promise: new Promise((resolve) => { callbackResolve = resolve; }), cancel() {} };
+  await assert.rejects(signIn({
+    store: { async put() { stored = true; } }, hostId: "urn:uuid:host", newRegistration: true,
+    listen: () => listener,
+    openBrowser(authUrl) { const auth = new URL(authUrl); const callback = new URL("http://127.0.0.1:33442/auth/callback"); callback.searchParams.set("state", auth.searchParams.get("state")); callback.searchParams.set("code", "fake-code"); callback.searchParams.set("client_id", "issued-client"); callbackResolve(callback.toString()); },
+    async fetchImpl() { return new Response(JSON.stringify({ access_token: "fake-access-token", refresh_token: "fake-refresh-token", id_token: "fake-id-token", expires_in: 3600, scope: "openid profile email" }), { status: 200 }); },
+    async verify() { return { subject: "fake-subject", email: null, issuer: "https://auth.openai.com" }; },
+  }), /plan_scope_not_granted/);
+  assert.equal(stored, false);
+});
+
+test("sign-in starts listener before browser launch and persists issued account only after validation", async () => {
+  const order = []; let callbackResolve;
+  const store = { async put(id, value) { order.push("store"); assert.equal(id.length, 40); assert.equal(value.clientId, "issued-client"); assert.equal(value.subject, "fake-subject"); } };
+  const listener = {
+    ready: Promise.resolve("http://127.0.0.1:33441/auth/callback"),
+    promise: new Promise((resolve) => { callbackResolve = resolve; }),
+    cancel() { order.push("closed"); },
+  };
+  const result = await signIn({
+    store, hostId: "urn:uuid:host", newRegistration: true,
+    listen() { order.push("listening"); return listener; },
+    openBrowser(authUrl) {
+      order.push("browser");
+      const auth = new URL(authUrl);
+      assert.equal(auth.searchParams.get("client_id"), "dynamic_agent_client");
+      const callback = new URL("http://127.0.0.1:33441/auth/callback");
+      callback.searchParams.set("state", auth.searchParams.get("state"));
+      callback.searchParams.set("code", "fake-code"); callback.searchParams.set("client_id", "issued-client");
+      callbackResolve(callback.toString()); order.push("callback");
+    },
+    async fetchImpl(url, init) {
+      order.push("exchange"); assert.equal(url, "https://auth.openai.com/api/accounts/oauth/token");
+      const body = new URLSearchParams(init.body); assert.equal(body.get("client_id"), "issued-client");
+      assert.equal(body.get("redirect_uri"), "http://127.0.0.1:33441/auth/callback");
+      return new Response(JSON.stringify({ access_token: "fake-access-token", refresh_token: "fake-refresh-token", id_token: "fake-id-token", token_type: "Bearer", expires_in: 3600, scope: "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct" }), { status: 200 });
+    },
+    async verify(_token, options) { order.push("verify"); assert.equal(options.clientId, "issued-client"); assert.ok(options.nonce); return { subject: "fake-subject", email: "fake@example.test", issuer: "https://auth.openai.com" }; },
+  });
+  assert.deepEqual(result, { profileId: result.profileId, email: "fake@example.test", subject: "fake-subject", planEnabled: true });
+  assert.ok(order.indexOf("listening") < order.indexOf("browser"));
+  assert.ok(order.indexOf("verify") < order.indexOf("store"));
+  assert.equal(order.at(-1), "closed");
+});
+
+test("ID token validation delegates cryptography to jose and checks nonce and identity", async () => {
+  const verify = async (_token, _jwks, options) => {
+    assert.equal(options.issuer, "https://auth.openai.com"); assert.equal(options.audience, "issued-client"); assert.deepEqual(options.algorithms, ["RS256"]);
+    return { payload: { sub: "fake-subject", email: "fake@example.test", nonce: "expected-nonce" } };
+  };
+  assert.deepEqual(await verifyIdToken("fake.id.token", { clientId: "issued-client", nonce: "expected-nonce", jwks: {}, verify }), { subject: "fake-subject", email: "fake@example.test", issuer: "https://auth.openai.com" });
+  await assert.rejects(verifyIdToken("fake.id.token", { clientId: "issued-client", nonce: "wrong", jwks: {}, verify }), /invalid_identity_token/);
+});
